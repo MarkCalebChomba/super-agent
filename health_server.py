@@ -3,7 +3,7 @@
 import json
 import os
 import sqlite3
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import HTTPServer, ThreadingHTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 
 HTML_TEMPLATE = """<!DOCTYPE html>
@@ -230,7 +230,8 @@ class HealthHandler(BaseHTTPRequestHandler):
         pass
 
 def run_health_server(port: int = 8080):
-    server = HTTPServer(("0.0.0.0", port), HealthHandler)
+    server = ThreadingHTTPServer(("0.0.0.0", port), HealthHandler)
+    server.timeout = 0.5
     print(f"Health server running on port {port}")
     server.serve_forever()
 

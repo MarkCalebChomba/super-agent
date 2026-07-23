@@ -177,15 +177,41 @@ class Orchestrator:
         self.telegram.send_daily_summary(summaries)
 
     def run(self):
-        """Main orchestrator entry point. Starts everything and keeps running."""
+        """Main orchestrator entry point. Starts everything and self-heals."""
         logger.info("Orchestrator starting...")
         self.start_all()
+        consecutive_failures = {}
         try:
             while self.running:
-                time.sleep(60)
+                time.sleep(30)
                 health = self.get_health_report()
                 active = health.get('active_threads', 0)
                 total = health.get('total_agents', 0)
+
+                # Self-heal: restart dead agent threads
+                for name, thread in list(self.threads.items()):
+                    if not thread.is_alive() and name in self.agents:
+                        agent = self.agents[name]
+                        if agent.running:
+                            logger.warning(f"Agent [{name}] thread dead — restarting")
+                            new_thread = threading.Thread(target=agent.run_loop, daemon=True,
+                                                          name=f"agent-{name}")
+                            new_thread.start()
+                            self.threads[name] = new_thread
+                            self.store.update_agent_status(name, "running")
+                            consecutive_failures[name] = consecutive_failures.get(name, 0) + 1
+                            if consecutive_failures[name] > 5:
+                                logger.error(f"Agent [{name}] crashed 5+ times — stopping")
+                                self.stop_agent(name)
+                        else:
+                            # Agent finished normally (e.g. max cycles)
+                            self.store.update_agent_status(name, "idle")
+
+                # Restart super agent if dead
+                if self._super_thread and not self._super_thread.is_alive():
+                    logger.warning("SuperAgent thread dead — restarting")
+                    self._start_super_agent()
+
                 logger.info(f"Health: {active}/{total} agents | "
                            f"{health.get('system', {}).get('agents', {}).get('available_slots', '?')} slots free")
         except KeyboardInterrupt:
