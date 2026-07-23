@@ -75,7 +75,7 @@ class StealthBrowser:
         """HTTP GET with curl_cffi fingerprinting."""
         try:
             import curl_cffi.requests as curl
-            fp = curl.requests.Session()
+            fp = curl.Session()
             resp = fp.get(url, headers=headers or {}, impersonate="chrome120",
                           timeout=30)
             return {"status": resp.status_code, "text": resp.text, "headers": dict(resp.headers)}
@@ -90,7 +90,7 @@ class StealthBrowser:
     def http_post(self, url: str, data: dict = None, headers: dict = None) -> Optional[dict]:
         try:
             import curl_cffi.requests as curl
-            fp = curl.requests.Session()
+            fp = curl.Session()
             resp = fp.post(url, json=data, headers=headers or {}, impersonate="chrome120",
                            timeout=30)
             return {"status": resp.status_code, "text": resp.text, "headers": dict(resp.headers)}
