@@ -121,6 +121,8 @@ def main():
     parser.add_argument("--list", action="store_true", help="List all agents")
     parser.add_argument("--init-db", action="store_true", help="Initialize databases only")
     parser.add_argument("--deploy", action="store_true", help="Deployment mode (starts health server)")
+    parser.add_argument("--status", action="store_true", help="Show system dashboard")
+    parser.add_argument("--dashboard", action="store_true", help="Start web dashboard server")
     args = parser.parse_args()
 
     if args.list:
@@ -129,6 +131,14 @@ def main():
         config = load_config()
         init_database(config.get("data_dir", "data"))
         logger.info("Databases initialized successfully")
+    elif args.status:
+        from master.dashboard import print_dashboard
+        print_dashboard()
+    elif args.dashboard:
+        port = int(os.getenv("PORT", "8080"))
+        logger.info(f"Starting web dashboard on port {port}...")
+        from health_server import run_health_server
+        run_health_server(port=port)
     elif args.agent:
         run_agent(args.agent)
     else:
