@@ -1,4 +1,5 @@
 import json
+import random
 from typing import Optional
 from loguru import logger
 
@@ -36,7 +37,6 @@ class WalletTools:
 
     def get_balance(self, chain: str, address: str) -> float:
         """Check wallet balance."""
-        import random
         balance = random.uniform(0, 0.5)
         logger.info(f"Balance for {chain}:{address[:8]}... = {balance}")
         return balance
