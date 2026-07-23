@@ -1,4 +1,6 @@
 __pycache__/
+*.log
+nul
 *.pyc
 *.pyo
 .env

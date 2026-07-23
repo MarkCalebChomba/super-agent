@@ -9,15 +9,15 @@ ModelTier = Literal["cheap", "balanced", "powerful"]
 
 MODEL_TIERS = {
     "cheap": {
-        "openrouter": "mistralai/mistral-7b-instruct:free",
+        "openrouter": "nvidia/nemotron-nano-9b-v2:free",
         "groq": "mixtral-8x7b-32768",
     },
     "balanced": {
-        "openrouter": "qwen/qwen-2-7b-instruct:free",
+        "openrouter": "google/gemma-4-26b-a4b-it:free",
         "groq": "llama-3.1-8b-instant",
     },
     "powerful": {
-        "openrouter": "qwen/qwen-2.5-72b-instruct:free",
+        "openrouter": "openai/gpt-oss-20b:free",
         "groq": "llama-3.3-70b-versatile",
     },
 }
@@ -41,22 +41,26 @@ class LLMRouter:
         self.openrouter_key_2 = os.getenv("OPENROUTER_API_KEY_2", "")
         self.groq_key = os.getenv("GROQ_API_KEY", "")
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        self._last_call = {}
+        self._nvidia_window = []
 
-    def _rate_limit(self, agent: str = "default"):
+    def _rate_limit_nvidia(self):
+        """Enforce 40 requests per minute global limit for NVIDIA."""
         now = time.time()
-        last = self._last_call.get(agent, 0)
-        elapsed = now - last
-        if elapsed < 2.0:
-            time.sleep(2.0 - elapsed)
-        self._last_call[agent] = time.time()
+        self._nvidia_window = [t for t in self._nvidia_window if now - t < 60]
+        if len(self._nvidia_window) >= 40:
+            sleep_time = 60 - (now - self._nvidia_window[0])
+            if sleep_time > 0:
+                logger.info(f"NVIDIA rate limit: waiting {sleep_time:.1f}s")
+                time.sleep(sleep_time)
+            self._nvidia_window = self._nvidia_window[1:]
+        self._nvidia_window.append(now)
 
     def complete(self, prompt: str, agent_type: str = "general",
                  system: str = "You are a helpful AI assistant.",
                  max_tokens: int = 4096, temperature: float = 0.7,
                  tier: ModelTier = "balanced") -> Optional[str]:
         """Route to NVIDIA DeepSeek V4 Flash first, fallback to free providers."""
-        self._rate_limit(agent_type)
+        self._rate_limit_nvidia()
 
         # 1. Try NVIDIA DeepSeek V4 Flash (primary)
         result = self._try_nvidia(prompt, system, max_tokens, temperature)
