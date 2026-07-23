@@ -50,10 +50,20 @@ Respond with JSON only:
 
     def should_notify(self, log_entry: dict) -> dict:
         """Evaluate a single log entry. Returns decision dict."""
+        level = log_entry.get("level", 0)
+        msg = log_entry.get("message", "")
+
+        # Pre-filter: skip LLM for trivial logs entirely
+        if level <= 20:
+            return {"priority": "low", "reason": "routine log, skipped", "should_notify": False}
+        if 25 <= level <= 30 and "successful" in msg:
+            return {"priority": "low", "reason": "routine success, skipped", "should_notify": False}
+
+        # For ERROR (40) and CTAs (50+), use LLM but with rate limiting
         prompt = f"""Agent: {log_entry.get('agent_name', 'unknown')}
-Level: {log_entry.get('level', 0)}
+Level: {level}
 Category: {log_entry.get('category', 'general')}
-Message: {log_entry.get('message', '')}
+Message: {msg}
 Data: {json.dumps(log_entry.get('data', {}))}"""
 
         try:
@@ -70,11 +80,11 @@ Data: {json.dumps(log_entry.get('data', {}))}"""
         except Exception as e:
             logger.warning(f"SupervisorFilter LLM error: {e}")
 
-        # Fallback: notify on errors and CTAs always
+        # Fallback: only notify on CRITICAL+ (50)
         return {
-            "priority": "high" if log_entry.get("level", 0) >= 50 else "low",
+            "priority": "high" if level >= 50 else "low",
             "reason": "fallback decision (LLM error)",
-            "should_notify": log_entry.get("level", 0) >= 40,
+            "should_notify": level >= 50,
         }
 
     def filter_logs(self, log_entries: list[dict]) -> list[dict]:
