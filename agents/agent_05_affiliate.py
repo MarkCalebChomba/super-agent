@@ -1,6 +1,7 @@
+import os
+import time
 from .base_agent import BaseAgent
 from tools.content_gen import ContentGenerator
-from tools.browser_automation import BrowserAutomation
 
 class AffiliateAgent(BaseAgent):
     """Affiliate marketing across all major programs."""
@@ -8,20 +9,29 @@ class AffiliateAgent(BaseAgent):
     def __init__(self, identity: dict = None):
         super().__init__("AffiliateMarketer", identity)
         self.content = ContentGenerator()
-        self.browser = BrowserAutomation(identity)
+        self.products = [
+            "Top 10 AI Writing Tools",
+            "Best AI coding assistants compared",
+            "AI image generators review",
+            "Best productivity tools 2026",
+            "Email marketing platforms guide",
+        ]
+        self.idx = 0
 
     def get_income_methods(self) -> str:
         return ("Amazon Associates, ClickBank, ShareASale, CJ Affiliate, "
                 "Rakuten, Impact, PartnerStack, niche affiliate programs, "
                 "Content sites with affiliate links")
 
-    def think(self, context: dict) -> str:
-        return ("!remember self building affiliate content site for AI tools category=plan importance=3\n"
-                "ACTION: Write product review article for top 10 AI writing tools with affiliate links\n"
-                "!remember self Affiliate article on AI writing tools published with Amazon links category=action")
-
-    def act(self, decision: str) -> dict:
-        article = self.content.blog_post("Top 10 AI Writing Tools Compared", "review", "long")
-        return {"success": bool(article), "action": "affiliate_article", "method": "affiliate_marketing",
-                "details": "Published affiliate article with product links",
-                "revenue": 0.0, "summary": "Affiliate content published"}
+    def build(self) -> dict:
+        product = self.products[self.idx % len(self.products)]
+        self.idx += 1
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"affiliate_article_{ts}.md"
+        filepath = os.path.join(self.build_dir, filename)
+        article = self.content.blog_post(product, "review", "long")
+        if article:
+            with open(filepath, "w") as f:
+                f.write(f"# {product}\n\n{article}\n\n---\n*Affiliate links included*\n")
+            return {"file": filepath, "summary": f"Affiliate article: {product}", "revenue": 0.0, "method": "affiliate_marketing"}
+        return None

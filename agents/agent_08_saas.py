@@ -1,3 +1,5 @@
+import os
+import time
 from .base_agent import BaseAgent
 from tools.content_gen import ContentGenerator
 
@@ -7,19 +9,57 @@ class SaaSAgent(BaseAgent):
     def __init__(self, identity: dict = None):
         super().__init__("SaaSBuilder", identity)
         self.content = ContentGenerator()
+        self.products = [
+            ("AI Project Manager Pro", "notion_template"),
+            ("SEO Content Analyzer", "web_app"),
+            ("Social Media Scheduler", "api"),
+            ("Lead Generation Bot", "bot"),
+            ("Analytics Dashboard", "web_app"),
+        ]
+        self.idx = 0
 
     def get_income_methods(self) -> str:
         return ("Micro-SaaS products, Notion templates, Webflow templates, "
                 "WordPress plugins, Shopify apps, API-as-a-service, "
                 "Chrome extensions, Mobile apps with in-app purchases")
 
-    def think(self, context: dict) -> str:
-        return ("!remember self brainstorming micro-SaaS ideas category=plan importance=3\n"
-                "ACTION: Design Notion template for AI-powered project management\n"
-                "!remember self Notion template created: 'AI Project Manager Pro' category=action")
+    def build(self) -> dict:
+        name, ptype = self.products[self.idx % len(self.products)]
+        self.idx += 1
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"{ptype}_{ts}.py"
+        filepath = os.path.join(self.build_dir, filename)
+        code = f'''"""
+{name} - {ptype.replace("_", " ").title()}
+Built by {self.name}
+"""
 
-    def act(self, decision: str) -> dict:
-        snippet = self.content.code_snippet("create a Notion template API endpoint", "python")
-        return {"success": True, "action": "digital_product_created", "method": "saas",
-                "details": "Notion template for AI project management designed",
-                "revenue": 0.0, "summary": "Digital product created for Gumroad"}
+import json
+from datetime import datetime
+
+
+class {name.replace(" ", "").replace("-", "")}:
+    """Main application class."""
+    
+    def __init__(self, config: dict = None):
+        self.config = config or {{}}
+        self.created = datetime.utcnow().isoformat()
+    
+    def process(self, input_data: dict) -> dict:
+        """Main processing method."""
+        return {{
+            "status": "success",
+            "product": "{name}",
+            "output": input_data,
+            "timestamp": self.created,
+        }}
+
+
+if __name__ == "__main__":
+    app = {name.replace(" ", "").replace("-", "")}()
+    result = app.process({{"test": True}})
+    print(json.dumps(result, indent=2))
+'''
+        with open(filepath, "w") as f:
+            f.write(code)
+        return {"file": filepath, "summary": f"SaaS product: {name}", "revenue": 0.0, "method": "saas"}

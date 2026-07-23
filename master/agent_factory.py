@@ -39,28 +39,31 @@ class DynamicAgentWrapper(BaseAgent):
                 base += f"\n\n[CUSTOM INSTRUCTIONS FROM SUPERAGENT]\n{custom}"
         return base
 
-    def think(self, context: dict) -> str:
+    def build(self) -> dict:
         store = SystemStore()
         custom = store.get_agent_instructions(self.name)
         instructions = custom or self._custom_instructions or "Explore and execute your income methods."
+        ts = __import__("time").strftime("%Y%m%d_%H%M%S")
 
         prompt = (
-            f"Current context: {context}\n\n"
             f"Your income methods: {self._income_methods}\n\n"
             f"Instructions: {instructions}\n\n"
-            f"Decide what to do next. Output:\n"
-            f"ACTION: <action>\n"
-            f"!remember <target> <note> if you learn something\n"
-            f"CTA: <message> only if you need human help"
+            f"Generate a practical tool or asset for your income method. "
+            f"Output a simple Python script, HTML page, or content draft. "
+            f"Be specific and produce real working code or content."
         )
-        return self.llm.complete(prompt, agent_type=self.name.split("_")[0] if "_" in self.name else "general",
-                                 system=self.build_system_prompt()) or "ACTION: research new opportunity"
-
-    def act(self, decision: str) -> dict:
-        self._process_memory_commands(decision)
-        return {"success": True, "action": decision[:100], "method": self._income_methods[:50],
-                "details": f"Executed: {decision[:80]}", "revenue": 0.0,
-                "summary": f"Dynamic agent {self.name} completed action"}
+        output = self.llm.complete(prompt, agent_type=self.name.split("_")[0] if "_" in self.name else "general",
+                                   system=self.build_system_prompt(),
+                                   max_tokens=2048)
+        if output:
+            import os
+            filename = f"build_{ts}.py"
+            filepath = os.path.join(self.build_dir, filename)
+            with open(filepath, "w") as f:
+                f.write(output)
+            return {"file": filepath, "summary": f"Dynamic build: {output[:80]}...", "revenue": 0.0,
+                    "method": self._income_methods[:50]}
+        return None
 
 
 class AgentFactory:

@@ -1,5 +1,6 @@
+import os
+import time
 from .base_agent import BaseAgent
-from tools.social_tools import SocialTools
 from tools.content_gen import ContentGenerator
 
 class SocialMediaAgent(BaseAgent):
@@ -7,24 +8,24 @@ class SocialMediaAgent(BaseAgent):
 
     def __init__(self, identity: dict = None):
         super().__init__("SocialMediaMonetizer", identity)
-        self.social = SocialTools(identity)
         self.content = ContentGenerator()
+        self.platforms = ["twitter", "instagram", "linkedin", "tiktok", "pinterest"]
+        self.idx = 0
 
     def get_income_methods(self) -> str:
         return ("Twitter/X monetization, Instagram sponsorships, TikTok Creator Fund, "
                 "LinkedIn premium content, Pinterest affiliate pins, "
                 "Brand deals across all platforms")
 
-    def think(self, context: dict) -> str:
-        return ("!remember self testing Twitter monetization category=plan importance=3\n"
-                "ACTION: Post viral-optimized Twitter thread about making money online\n"
-                "!remember self Twitter thread posted on money-making strategies category=action")
-
-    def act(self, decision: str) -> dict:
-        caption = self.content.social_caption("twitter", "How I make money with AI agents")
+    def build(self) -> dict:
+        platform = self.platforms[self.idx % len(self.platforms)]
+        self.idx += 1
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"{platform}_post_{ts}.md"
+        filepath = os.path.join(self.build_dir, filename)
+        caption = self.content.social_caption(platform, "Making money with AI agents")
         if caption:
-            result = self.social.post_text("twitter", caption)
-            return {"success": result.get("success", False), "action": "twitter_post",
-                    "method": "social_media", "details": caption[:60] + "...",
-                    "revenue": 0.0, "summary": f"Twitter post published"}
-        return {"success": False, "action": "twitter_post", "error": "caption generation failed"}
+            with open(filepath, "w") as f:
+                f.write(f"Platform: {platform}\n\n{caption}\n")
+            return {"file": filepath, "summary": f"{platform} post draft", "revenue": 0.0, "method": "social_media"}
+        return None

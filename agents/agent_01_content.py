@@ -1,3 +1,5 @@
+import os
+import time
 from .base_agent import BaseAgent
 from tools.content_gen import ContentGenerator
 
@@ -7,26 +9,29 @@ class ContentAgent(BaseAgent):
     def __init__(self, identity: dict = None):
         super().__init__("ContentCreator", identity)
         self.content = ContentGenerator()
-        self.platforms_tried = []
+        self.topics = [
+            "AI tools for productivity",
+            "How to make money with AI agents",
+            "Best free AI tools in 2026",
+            "Automating your workflow with Python",
+            "Side hustles that actually work",
+        ]
+        self.idx = 0
 
     def get_income_methods(self) -> str:
         return ("Blogging (AdSense/Mediavine), Newsletter (Substack, Beehiiv), "
                 "Online courses (Udemy, Gumroad), eBooks (Amazon KDP), "
                 "Medium Partner Program, Ghostwriting, Sponsored content")
 
-    def think(self, context: dict) -> str:
-        if "blog" not in self.platforms_tried:
-            return ("!remember self testing blog monetization category=plan importance=3\n"
-                    "ACTION: Generate and publish blog post about AI tools for productivity\n"
-                    "!remember self Blog post on AI productivity published to Medium and personal blog category=action")
-        return "ACTION: Check analytics on existing content, optimize for monetization"
-
-    def act(self, decision: str) -> dict:
-        topic = decision.split("about")[-1].strip() if "about" in decision else "AI productivity"
+    def build(self) -> dict:
+        topic = self.topics[self.idx % len(self.topics)]
+        self.idx += 1
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        filename = f"blog_{ts}.md"
+        filepath = os.path.join(self.build_dir, filename)
         post = self.content.blog_post(topic)
         if post:
-            self.platforms_tried.append("blog")
-            return {"success": True, "action": "blog_post", "method": "blogging",
-                    "details": f"Published: {topic[:50]}...", "revenue": 0.0,
-                    "summary": f"Blog post on {topic} generated and published"}
-        return {"success": False, "action": "blog_post", "error": "content generation failed"}
+            with open(filepath, "w") as f:
+                f.write(f"# {topic}\n\n{post}\n")
+            return {"file": filepath, "summary": f"Blog post: {topic}", "revenue": 0.0, "method": "blogging"}
+        return None
