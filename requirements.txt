@@ -1,0 +1,20 @@
+# Core
+loguru>=0.7.2
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Web scraping & browser automation
+beautifulsoup4>=4.12.2
+curl-cffi>=0.5.10
+
+# Resource monitoring (memory tracking)
+psutil>=5.9.0
+
+# Anti-detection browser (optional, uncomment if needed)
+# undetected-chromedriver>=3.5.4
+# camoufox>=0.1.0
+
+# SQLite3 is built-in
+
+# Testing
+pytest>=8.0.0

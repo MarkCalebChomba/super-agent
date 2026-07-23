@@ -1,0 +1,22 @@
+{
+  "data_dir": "data",
+  "max_cycles_per_agent": 0,
+  "agents_enabled": [
+    "ContentCreator",
+    "SocialMediaMonetizer",
+    "VideoCreator",
+    "EcommerceMerchant",
+    "AffiliateMarketer",
+    "CryptoTrader",
+    "FreelanceOptimizer",
+    "SaaSBuilder",
+    "DeFiOptimizer",
+    "DataArbitrageur",
+    "ServiceProvider",
+    "PlatformMonetizer"
+  ],
+  "llm_preference": "openrouter",
+  "consolidation_interval_cycles": 10,
+  "log_level": "DEBUG",
+  "check_interval_seconds": 15
+}
