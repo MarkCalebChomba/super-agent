@@ -5,128 +5,417 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Super Agent Dashboard</title>
 <style>
+:root {
+  --bg: #0a0e14;
+  --surface: #131920;
+  --border: #1e293b;
+  --text: #e2e8f0;
+  --text-dim: #64748b;
+  --accent: #38bdf8;
+  --green: #22c55e;
+  --red: #ef4444;
+  --yellow: #eab308;
+  --purple: #a78bfa;
+  --radius: 12px;
+  --shadow: 0 4px 24px rgba(0,0,0,0.4);
+}
 * { margin:0; padding:0; box-sizing:border-box; }
-body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0d1117; color:#c9d1d9; padding:20px; }
-.container { max-width:1200px; margin:0 auto; }
-h1 { color:#58a6ff; font-size:1.5rem; display:inline; }
-h2 { color:#f0f6fc; font-size:1.1rem; margin-bottom:12px; border-bottom:1px solid #30363d; padding-bottom:8px; }
-.time { color:#8b949e; font-size:0.85rem; float:right; margin-top:4px; }
-.card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; margin-bottom:16px; }
-.grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr)); gap:12px; }
-table { width:100%; border-collapse:collapse; font-size:0.85rem; }
-th { text-align:left; color:#8b949e; padding:6px 8px; border-bottom:1px solid #30363d; font-weight:500; }
-td { padding:6px 8px; border-bottom:1px solid #21262d; }
-.badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:0.75rem; font-weight:600; }
-.badge-green { background:#1b4126; color:#3fb950; }
-.badge-red { background:#4e1a1a; color:#f85149; }
-.badge-yellow { background:#4d3a0f; color:#d29922; }
-.badge-blue { background:#1b3a5c; color:#58a6ff; }
-.log-msg { font-family:'SF Mono',monospace; font-size:0.8rem; color:#8b949e; }
-.revenue { color:#d2a8ff; font-size:1.2rem; font-weight:600; }
-.plan-item { padding:6px 0; border-bottom:1px solid #21262d; }
-.plan-item:last-child { border:0; }
-.plan-agent { color:#58a6ff; }
-.inbox-badge { background:#f85149; color:#fff; border-radius:50%; padding:1px 6px; font-size:0.7rem; margin-left:4px; }
-.stat { text-align:center; padding:12px; }
-.stat-value { font-size:1.5rem; font-weight:600; color:#f0f6fc; }
-.stat-label { font-size:0.8rem; color:#8b949e; }
-a { color:#58a6ff; text-decoration:none; }
-a:hover { text-decoration:underline; }
-.footer { text-align:center; color:#484f58; font-size:0.8rem; margin-top:24px; }
-.refresh { cursor:pointer; }
-@media (max-width:640px) { .grid { grid-template-columns:1fr; } }
+body {
+  font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+  background: var(--bg); color: var(--text);
+  min-height: 100vh;
+}
+.container { max-width: 1280px; margin: 0 auto; padding: 20px; }
+header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: 24px; flex-wrap: wrap; gap: 12px;
+}
+header h1 {
+  font-size: 1.5rem; font-weight: 700;
+  background: linear-gradient(135deg, var(--accent), var(--purple));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent;
+}
+.header-right { display: flex; align-items: center; gap: 16px; font-size: 0.85rem; color: var(--text-dim); }
+.indicator { display: flex; align-items: center; gap: 6px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
+.dot.green { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.dot.red { background: var(--red); box-shadow: 0 0 8px var(--red); }
+.dot.yellow { background: var(--yellow); }
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px; margin-bottom: 20px;
+}
+.stat-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+.stat-card:hover { transform: translateY(-2px); box-shadow: var(--shadow); }
+.stat-value { font-size: 1.8rem; font-weight: 700; line-height: 1.2; }
+.stat-label { font-size: 0.8rem; color: var(--text-dim); margin-top: 4px; }
+.stat-change { font-size: 0.75rem; margin-top: 2px; }
+.stat-change.up { color: var(--green); }
+.stat-change.down { color: var(--red); }
+.section-title {
+  font-size: 1rem; font-weight: 600; margin-bottom: 12px;
+  display: flex; align-items: center; gap: 8px;
+}
+.agent-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 12px; margin-bottom: 24px;
+}
+.agent-card {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+  transition: all 0.2s; position: relative; overflow: hidden;
+}
+.agent-card:hover { border-color: var(--accent); box-shadow: var(--shadow); }
+.agent-card .top {
+  display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px;
+}
+.agent-card .name { font-weight: 600; font-size: 0.95rem; }
+.agent-card .name a { color: var(--text); text-decoration: none; }
+.agent-card .name a:hover { color: var(--accent); }
+.badge {
+  display: inline-block; padding: 2px 10px; border-radius: 20px;
+  font-size: 0.7rem; font-weight: 600; text-transform: uppercase;
+}
+.badge-running { background: rgba(34,197,94,0.15); color: var(--green); }
+.badge-idle { background: rgba(234,179,8,0.15); color: var(--yellow); }
+.badge-stopped { background: rgba(239,68,68,0.15); color: var(--red); }
+.badge-registered { background: rgba(56,189,248,0.15); color: var(--accent); }
+.agent-card .stats {
+  display: flex; gap: 16px; font-size: 0.78rem; color: var(--text-dim); margin-bottom: 10px;
+}
+.agent-card .stats span strong { color: var(--text); }
+.agent-card .actions {
+  display: flex; gap: 6px; flex-wrap: wrap;
+}
+.btn {
+  padding: 5px 12px; border: 1px solid var(--border); border-radius: 6px;
+  background: transparent; color: var(--text-dim); cursor: pointer;
+  font-size: 0.75rem; transition: all 0.15s;
+}
+.btn:hover { border-color: var(--accent); color: var(--accent); }
+.btn-start:hover { border-color: var(--green); color: var(--green); }
+.btn-stop:hover { border-color: var(--red); color: var(--red); }
+.btn-restart:hover { border-color: var(--yellow); color: var(--yellow); }
+.btn-primary {
+  background: var(--accent); color: #000; border: none; padding: 6px 14px;
+  border-radius: 6px; cursor: pointer; font-size: 0.8rem; font-weight: 500;
+}
+.btn-primary:hover { opacity: 0.85; }
+.btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.panel-row {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px;
+}
+@media (max-width: 900px) { .panel-row { grid-template-columns: 1fr; } }
+.panel {
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 16px;
+}
+.panel-header {
+  display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;
+}
+.panel-title { font-size: 0.9rem; font-weight: 600; }
+
+.log-entry {
+  font-family: 'SF Mono', 'Cascadia Code', monospace; font-size: 0.75rem;
+  padding: 4px 0; border-bottom: 1px solid rgba(30,41,59,0.5);
+  display: flex; gap: 8px;
+}
+.log-time { color: var(--text-dim); white-space: nowrap; min-width: 80px; }
+.log-agent { color: var(--accent); min-width: 100px; }
+.log-level {
+  min-width: 50px; font-weight: 600;
+}
+.log-level.INFO { color: var(--text); }
+.log-level.WARN { color: var(--yellow); }
+.log-level.ERROR { color: var(--red); }
+.log-level.DEBUG { color: var(--text-dim); }
+.log-msg { color: var(--text-dim); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.log-scroll {
+  max-height: 300px; overflow-y: auto;
+}
+.log-scroll::-webkit-scrollbar { width: 4px; }
+.log-scroll::-webkit-scrollbar-track { background: transparent; }
+.log-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+
+.filter-bar {
+  display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap;
+}
+.filter-btn {
+  padding: 3px 10px; border: 1px solid var(--border); border-radius: 12px;
+  background: transparent; color: var(--text-dim); cursor: pointer;
+  font-size: 0.72rem; transition: all 0.15s;
+}
+.filter-btn.active { background: var(--accent); color: #000; border-color: var(--accent); }
+.filter-btn:hover:not(.active) { border-color: var(--text-dim); color: var(--text); }
+
+.inbox-item {
+  padding: 8px 0; border-bottom: 1px solid var(--border); display: flex;
+  justify-content: space-between; align-items: center;
+}
+.inbox-item:last-child { border: 0; }
+.inbox-agent { color: var(--accent); font-weight: 500; font-size: 0.85rem; }
+.inbox-count { background: var(--red); color: #fff; border-radius: 50%; padding: 1px 7px; font-size: 0.7rem; }
+
+.search-box {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 14px; color: var(--text); font-size: 0.85rem; width: 100%;
+  margin-bottom: 16px;
+}
+.search-box:focus { outline: none; border-color: var(--accent); }
+.search-box::placeholder { color: var(--text-dim); }
+
+.empty { color: var(--text-dim); font-size: 0.85rem; padding: 20px 0; text-align: center; }
+
+.toast {
+  position: fixed; bottom: 24px; right: 24px;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 12px 20px;
+  box-shadow: var(--shadow); font-size: 0.85rem;
+  transform: translateY(100px); opacity: 0;
+  transition: all 0.3s; z-index: 999;
+}
+.toast.show { transform: translateY(0); opacity: 1; }
+.toast.success { border-left: 3px solid var(--green); }
+.toast.error { border-left: 3px solid var(--red); }
+
+.chart-bar {
+  display: flex; align-items: flex-end; gap: 3px; height: 40px; margin-top: 8px;
+}
+.chart-bar div {
+  flex: 1; background: var(--accent); border-radius: 2px 2px 0 0;
+  opacity: 0.6; transition: height 0.5s; min-height: 2px;
+}
+.chart-bar div:nth-child(odd) { background: var(--purple); }
+
+footer {
+  text-align: center; color: var(--text-dim); font-size: 0.75rem;
+  padding: 20px 0; border-top: 1px solid var(--border); margin-top: 24px;
+}
 </style>
 </head>
 <body>
 <div class="container">
-  <h1>Super Agent Dashboard</h1>
-  <span class="time">{{ now }} &middot; <a class="refresh" href="javascript:location.reload()">refresh</a></span>
-
-  <!-- Stats row -->
-  <div class="card" style="margin-top:16px;">
-    <div class="grid">
-      <div class="stat"><div class="stat-value">{{ agents|length }}</div><div class="stat-label">Agents</div></div>
-      <div class="stat"><div class="stat-value">{{ resources.get('active_agents', 0) }}</div><div class="stat-label">Active (24h)</div></div>
-      <div class="stat"><div class="stat-value">{{ resources.get('total_api_calls', 0) }}</div><div class="stat-label">API Calls (24h)</div></div>
-      <div class="stat"><div class="stat-value">{{ resources.get('total_tokens', 0) }}</div><div class="stat-label">Tokens (24h)</div></div>
-      <div class="stat"><div class="stat-value revenue">${{ "%.2f"|format(revenue.total) }}</div><div class="stat-label">Revenue (24h ${{ "%.2f"|format(revenue['24h']) }})</div></div>
+  <header>
+    <h1>Super Agent Dashboard</h1>
+    <div class="header-right">
+      <span class="indicator"><span class="dot green" id="status-dot"></span><span id="status-text">Connected</span></span>
+      <span id="clock"></span>
+      <span class="indicator"><span class="dot" id="agent-dot" style="background:var(--green)"></span><span id="agent-count">0</span> running</span>
     </div>
-  </div>
+  </header>
 
-  <div class="grid">
-    <!-- Agent cards -->
-    {% for a in agents %}
-    <div class="card" style="padding:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;">
-        <a href="/agent/{{ a.agent_name }}" style="font-weight:600;">{{ a.agent_name }}</a>
-        <span>
-          {% set cls = {'running':'badge-green','idle':'badge-yellow','stopped':'badge-red','registered':'badge-blue'}.get(a.status, 'badge-yellow') %}
-          <span class="badge {{ cls }}">{{ a.status }}</span>
-        </span>
+  <!-- Stats -->
+  <div class="cards-grid" id="stats-grid"></div>
+
+  <!-- Search -->
+  <input class="search-box" id="search" type="text" placeholder="Search agents by name..." oninput="filterAgents()">
+
+  <!-- Agents -->
+  <div class="agent-grid" id="agent-grid"></div>
+
+  <div class="panel-row">
+    <!-- Logs -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Activity Log</span>
+        <div class="filter-bar">
+          <button class="filter-btn active" data-level="" onclick="setLogFilter(this)">All</button>
+          <button class="filter-btn" data-level="20" onclick="setLogFilter(this)">INFO</button>
+          <button class="filter-btn" data-level="30" onclick="setLogFilter(this)">WARN</button>
+          <button class="filter-btn" data-level="40" onclick="setLogFilter(this)">ERROR</button>
+        </div>
       </div>
-      <div style="font-size:0.8rem;color:#8b949e;margin-top:8px;">
-        Builds: {{ a.build_count }} &middot; Errors: {{ a.error_count }} &middot; Revenue: ${{ "%.2f"|format(a.total_revenue) }}
-        {% if a.latest_build %}
-        <br>Latest: <span style="color:#58a6ff;">{{ a.latest_build }}</span>
-        {% endif %}
+      <div class="log-scroll" id="log-list"></div>
+    </div>
+
+    <!-- Inbox / Plans -->
+    <div class="panel">
+      <div class="panel-header">
+        <span class="panel-title">Inbox & Plans</span>
       </div>
+      <div id="inbox-list"></div>
+      <div id="plans-list" style="margin-top:12px;"></div>
     </div>
-    {% endfor %}
   </div>
 
-  <!-- Inbox summary -->
-  {% if inbox %}
-  <div class="card">
-    <h2>Unread Advice <span class="inbox-badge" style="font-size:0.8rem;padding:2px 8px;">{{ inbox|sum(attribute='unread') }}</span></h2>
-    {% for m in inbox %}
-    <div class="plan-item"><a href="/agent/{{ m.agent_name }}">{{ m.agent_name }}</a>: {{ m.unread }} unread message(s)</div>
-    {% endfor %}
-  </div>
-  {% endif %}
-
-  <!-- Current Plans -->
-  <div class="card">
-    <h2>Agent Plans</h2>
-    {% if plans %}
-    {% for p in plans %}
-    <div class="plan-item">
-      <span class="plan-agent">{{ p.agent_name }}</span>: {{ p.content[:100] }}
-    </div>
-    {% endfor %}
-    {% else %}
-    <div style="color:#8b949e;">No plans reported yet</div>
-    {% endif %}
-  </div>
-
-  <!-- Recent Logs -->
-  <div class="card">
-    <h2>Recent Activity</h2>
-    <table>
-      <tr><th>Time</th><th>Agent</th><th>Level</th><th>Message</th></tr>
-      {% for l in logs %}
-      <tr>
-        <td style="white-space:nowrap;">{{ l.timestamp[:19] if l.timestamp else '' }}</td>
-        <td><a href="/agent/{{ l.agent_name }}">{{ l.agent_name[:18] }}</a></td>
-        <td>
-          {% set lv = {'10':'DEBUG','20':'INFO','25':'ACTION','30':'WARN','40':'ERROR','45':'REVENUE','50':'CTA'} %}
-          {% set lc = {'10':'#8b949e','20':'#c9d1d9','25':'#3fb950','30':'#d29922','40':'#f85149','45':'#d2a8ff','50':'#f85149'} %}
-          <span style="color:{{ lc.get(l.level|string,'#c9d1d9') }}">{{ lv.get(l.level|string, l.level) }}</span>
-        </td>
-        <td class="log-msg">{{ l.message[:80] }}</td>
-      </tr>
-      {% endfor %}
-    </table>
-  </div>
-
-  <p class="footer">Auto-refresh: <span id="countdown">30</span>s &middot; <span class="refresh" onclick="location.reload()">Refresh now</span></p>
+  <footer>
+    Super Agent &middot; <span id="refresh-info">Auto-refreshing every 5s</span>
+  </footer>
 </div>
+
+<div class="toast" id="toast"></div>
+
 <script>
-var sec = 30;
-setInterval(function(){
-  sec--;
-  document.getElementById('countdown').textContent = sec;
-  if(sec <= 0) { location.reload(); }
-}, 1000);
+const LOG_LEVELS = {10:'DEBUG',20:'INFO',25:'ACTION',30:'WARN',40:'ERROR',45:'REVENUE',50:'CTA'};
+let logFilter = '';
+let prevLogId = 0;
+let agentsCache = [];
+
+function showToast(msg, type) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.className = 'toast ' + type;
+  setTimeout(() => t.classList.add('show'), 10);
+  setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function updateClock() {
+  document.getElementById('clock').textContent = new Date().toLocaleTimeString();
+}
+
+function fetchJSON(url) {
+  return fetch(url).then(r => r.json());
+}
+
+function statCard(value, label, color, change) {
+  return `<div class="stat-card">
+    <div class="stat-value" style="color:${color}">${value}</div>
+    <div class="stat-label">${label}</div>
+    ${change ? `<div class="stat-change ${change.dir}">${change.text}</div>` : ''}
+  </div>`;
+}
+
+function badge(status) {
+  const map = {running:'badge-running', idle:'badge-idle', stopped:'badge-stopped', registered:'badge-registered'};
+  return `<span class="badge ${map[status] || 'badge-idle'}">${status}</span>`;
+}
+
+function agentCard(a) {
+  return `<div class="agent-card" data-name="${a.agent_name.toLowerCase()}">
+    <div class="top">
+      <div class="name"><a href="/agent/${a.agent_name}">${a.agent_name}</a> ${a.running ? '<span style="color:var(--green);font-size:0.7rem;">●</span>' : ''}</div>
+      ${badge(a.status)}
+    </div>
+    <div class="stats">
+      <span>Builds: <strong>${a.build_count || 0}</strong></span>
+      <span>Errors: <strong>${a.error_count || 0}</strong></span>
+      <span>Unread: <strong>${a.unread || 0}</strong></span>
+    </div>
+    <div class="actions">
+      ${a.running
+        ? `<button class="btn btn-stop" onclick="stopAgent('${a.agent_name}')">Stop</button><button class="btn btn-restart" onclick="restartAgent('${a.agent_name}')">Restart</button>`
+        : `<button class="btn btn-start" onclick="startAgent('${a.agent_name}')">Start</button>`
+      }
+      <a href="/agent/${a.agent_name}" class="btn" style="text-decoration:none;">Detail</a>
+    </div>
+  </div>`;
+}
+
+function filterAgents() {
+  const q = document.getElementById('search').value.toLowerCase();
+  document.querySelectorAll('.agent-card').forEach(c => {
+    c.style.display = c.dataset.name.includes(q) ? '' : 'none';
+  });
+}
+
+async function loadDashboard() {
+  try {
+    const [status, agents, logs, plans, inboxData] = await Promise.all([
+      fetchJSON('/api/status'),
+      fetchJSON('/api/agents'),
+      fetchJSON('/api/logs?limit=50'),
+      fetchJSON('/api/plans'),
+      fetchJSON('/api/unread'),
+    ]);
+
+    const statusDot = document.getElementById('status-dot');
+    const statusText = document.getElementById('status-text');
+    const agentCount = document.getElementById('agent-count');
+    const agentDot = document.getElementById('agent-dot');
+
+    statusDot.className = 'dot green';
+    statusText.textContent = 'Connected';
+    agentCount.textContent = status.running_count || 0;
+    agentDot.style.background = (status.running_count || 0) > 0 ? 'var(--green)' : 'var(--yellow)';
+
+    const total = agents.length;
+    const running = agents.filter(a => a.running).length;
+    const errs = agents.reduce((s,a) => s + (a.error_count||0), 0);
+    const unread = Object.values(inboxData).reduce((s,v) => s+v, 0);
+
+    document.getElementById('stats-grid').innerHTML =
+      statCard(total, 'Total Agents', 'var(--accent)') +
+      statCard(running, 'Running', 'var(--green)') +
+      statCard(errs, 'Total Errors', errs > 0 ? 'var(--red)' : 'var(--text-dim)') +
+      statCard(unread, 'Unread Messages', unread > 0 ? 'var(--red)' : 'var(--text-dim)');
+
+    agentsCache = agents;
+    document.getElementById('agent-grid').innerHTML = agents.map(agentCard).join('');
+
+    const logEl = document.getElementById('log-list');
+    const newLogs = logFilter
+      ? logs.filter(l => l.level == logFilter)
+      : logs;
+    if (newLogs.length > 0) prevLogId = Math.max(prevLogId, newLogs[0].id || 0);
+    logEl.innerHTML = newLogs.slice(0, 50).map(l => {
+      const lvl = LOG_LEVELS[l.level] || l.level;
+      return `<div class="log-entry">
+        <span class="log-time">${(l.timestamp||'').slice(11,19)}</span>
+        <span class="log-agent">${(l.agent_name||'').slice(0,16)}</span>
+        <span class="log-level ${lvl}">${lvl}</span>
+        <span class="log-msg">${(l.message||'').slice(0,120)}</span>
+      </div>`;
+    }).join('');
+
+    const planEl = document.getElementById('plans-list');
+    if (plans.length) {
+      planEl.innerHTML = '<div style="font-size:0.8rem;color:var(--text-dim);margin-bottom:6px;">Active Plans</div>' +
+        plans.slice(0, 5).map(p =>
+          `<div style="font-size:0.78rem;padding:4px 0;border-bottom:1px solid var(--border);">
+            <span style="color:var(--accent);">${p.agent_name}</span>: ${(p.content||'').slice(0,80)}
+          </div>`
+        ).join('');
+    } else {
+      planEl.innerHTML = '<div class="empty">No plans</div>';
+    }
+
+    const inboxEl = document.getElementById('inbox-list');
+    const entries = Object.entries(inboxData);
+    if (entries.length) {
+      inboxEl.innerHTML = '<div style="font-size:0.8rem;color:var(--text-dim);margin-bottom:6px;">Unread Messages</div>' +
+        entries.map(([agent, count]) =>
+          `<div class="inbox-item">
+            <a href="/agent/${agent}" class="inbox-agent">${agent}</a>
+            <span class="inbox-count">${count}</span>
+          </div>`
+        ).join('');
+    } else {
+      inboxEl.innerHTML = '<div class="empty">No unread messages</div>';
+    }
+  } catch(e) {
+    document.getElementById('status-dot').className = 'dot red';
+    document.getElementById('status-text').textContent = 'Disconnected';
+  }
+}
+
+function setLogFilter(btn) {
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  logFilter = btn.dataset.level;
+  loadDashboard();
+}
+
+async function agentAction(name, action) {
+  try {
+    const res = await fetchJSON(`/api/agent/${name}/${action}`, {method:'POST'});
+    if (res.success) { showToast(`${name} ${action}ed`, 'success'); loadDashboard(); }
+    else showToast(`${name}: ${res.error}`, 'error');
+  } catch(e) { showToast(`Failed to ${action} ${name}`, 'error'); }
+}
+function startAgent(name) { agentAction(name, 'start'); }
+function stopAgent(name) { agentAction(name, 'stop'); }
+function restartAgent(name) { agentAction(name, 'restart'); }
+
+setInterval(updateClock, 1000);
+setInterval(loadDashboard, 5000);
+updateClock();
+loadDashboard();
 </script>
 </body>
 </html>

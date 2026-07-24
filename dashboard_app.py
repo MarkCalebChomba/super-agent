@@ -1,19 +1,25 @@
-"""Full-featured Flask dashboard for agent system monitoring and control.
+"""Interactive Flask dashboard — real-time agent monitoring and control.
 
 Endpoints:
-    GET  /              - Main dashboard (all agents, resources, plans)
-    GET  /agent/<name>  - Per-agent detail (logs, plan, inbox, files)
-    POST /api/advise    - Send advice to an agent
-    GET  /api/agents    - JSON: all agents
-    GET  /api/health    - JSON: system health
+    GET  /                    - Main dashboard
+    GET  /agent/<name>        - Per-agent detail page
+    POST /agent/<name>/advise - Send advice to an agent
+    GET  /api/status          - JSON: system overview
+    GET  /api/agents          - JSON: all agents
+    GET  /api/logs            - JSON: filtered logs
+    GET  /api/agent/<name>    - JSON: single agent detail
+    POST /api/agent/<name>/start  - Start an agent
+    POST /api/agent/<name>/stop   - Stop an agent
+    POST /api/agent/<name>/restart- Restart an agent
 """
 
 import os
 import json
+import time
+import subprocess
 import sqlite3
 from pathlib import Path
 from datetime import datetime
-from functools import lru_cache
 from flask import Flask, render_template, request, jsonify, redirect, url_for
 
 app = Flask(__name__)
@@ -21,6 +27,8 @@ app = Flask(__name__)
 DATA_DIR = Path("data")
 LOG_DIR = DATA_DIR / "logs"
 BUILD_DIR = Path("build_output")
+
+_running_agents = {}
 
 
 def get_central_log():
@@ -41,23 +49,14 @@ def get_system_db():
     return conn
 
 
-def get_revenue_db():
-    db = DATA_DIR / "revenue.db"
-    if not db.exists():
-        return None
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def get_build_count(agent_name: str) -> int:
+def get_build_count(agent_name):
     agent_dir = BUILD_DIR / agent_name
     if agent_dir.exists():
         return len([f for f in agent_dir.iterdir() if f.is_file()])
     return 0
 
 
-def get_latest_build(agent_name: str) -> str:
+def get_latest_build(agent_name):
     agent_dir = BUILD_DIR / agent_name
     if agent_dir.exists():
         files = sorted(agent_dir.iterdir(), key=os.path.getmtime, reverse=True)
@@ -66,213 +65,250 @@ def get_latest_build(agent_name: str) -> str:
     return ""
 
 
-def get_build_preview(agent_name: str) -> str:
+def get_build_preview(agent_name):
     agent_dir = BUILD_DIR / agent_name
     if agent_dir.exists():
         files = sorted(agent_dir.iterdir(), key=os.path.getmtime, reverse=True)
         if files:
             try:
-                content = files[0].read_text(errors="replace")
-                return content[:300]
+                return files[0].read_text(errors="replace")[:300]
             except Exception:
-                return "(binary or unreadable)"
+                return "(binary)"
     return ""
 
 
-def get_agent_logs(agent_name: str, limit: int = 50) -> list:
+def get_recent_logs(agent_name=None, level=None, limit=50, since=None):
     cl = get_central_log()
     if not cl:
         return []
-    rows = cl.execute(
-        "SELECT level, message, timestamp FROM central_log WHERE agent_name = ? ORDER BY id DESC LIMIT ?",
-        (agent_name, limit)
-    ).fetchall()
-    cl.close()
-    return [dict(r) for r in rows]
-
-
-def get_all_recent_logs(limit: int = 30) -> list:
-    cl = get_central_log()
-    if not cl:
+    query = "SELECT id, agent_name, level, message, timestamp FROM central_log"
+    params = []
+    conditions = []
+    if agent_name:
+        conditions.append("agent_name = ?")
+        params.append(agent_name)
+    if level:
+        conditions.append("level = ?")
+        params.append(level)
+    if since:
+        conditions.append("timestamp > ?")
+        params.append(since)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += " ORDER BY id DESC LIMIT ?"
+    params.append(limit)
+    try:
+        rows = cl.execute(query, params).fetchall()
+        cl.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        cl.close()
         return []
-    rows = cl.execute(
-        "SELECT agent_name, level, message, timestamp FROM central_log ORDER BY id DESC LIMIT ?",
-        (limit,)
-    ).fetchall()
-    cl.close()
-    return [dict(r) for r in rows]
 
 
-def get_resource_summary() -> dict:
+def get_unread_counts():
     db = get_system_db()
     if not db:
         return {}
-    row = db.execute("""
-        SELECT COUNT(DISTINCT agent_name) as active_agents,
-               COALESCE(SUM(memory_mb), 0) as total_memory,
-               COALESCE(SUM(tokens_used), 0) as total_tokens,
-               COALESCE(SUM(api_calls), 0) as total_api_calls
-        FROM resource_usage WHERE timestamp >= datetime('now', '-24 hours')
-    """).fetchone()
-    db.close()
-    return dict(row) if row else {}
+    try:
+        rows = db.execute(
+            "SELECT agent_name, COUNT(*) as unread FROM agent_inbox WHERE read = 0 GROUP BY agent_name"
+        ).fetchall()
+        db.close()
+        return {r["agent_name"]: r["unread"] for r in rows}
+    except Exception:
+        db.close()
+        return {}
+
+
+def get_active_plans():
+    db = get_system_db()
+    if not db:
+        return []
+    try:
+        rows = db.execute(
+            "SELECT agent_name, content, created_at FROM agent_plans WHERE plan_type = 'current' AND status = 'active' ORDER BY created_at DESC"
+        ).fetchall()
+        db.close()
+        return [dict(r) for r in rows]
+    except Exception:
+        db.close()
+        return []
 
 
 # === HTML ROUTES ===
 
 @app.route("/")
 def index():
-    db = get_system_db()
-    agents_data = []
-    if db:
-        rows = db.execute("SELECT * FROM agent_registry ORDER BY created_at ASC").fetchall()
-        for r in rows:
-            d = dict(r)
-            d["build_count"] = get_build_count(d["agent_name"])
-            d["latest_build"] = get_latest_build(d["agent_name"])
-            agents_data.append(d)
-        db.close()
-
-    # Inbox summary
-    inbox = []
-    if db:
-        rows = db.execute(
-            "SELECT agent_name, COUNT(*) as unread FROM agent_inbox WHERE read = 0 GROUP BY agent_name ORDER BY unread DESC"
-        ).fetchall()
-        inbox = [dict(r) for r in rows]
-
-    logs = get_all_recent_logs(20)
-    resources = get_resource_summary()
-    plans = []
-    if db:
-        rows = db.execute(
-            "SELECT agent_name, content, created_at FROM agent_plans WHERE plan_type = 'current' AND status = 'active' ORDER BY created_at DESC"
-        ).fetchall()
-        plans = [dict(r) for r in rows]
-        db.close()
-
-    revenue = {"total": 0.0, "24h": 0.0, "7d": 0.0}
-    rdb = get_revenue_db()
-    if rdb:
-        revenue["total"] = rdb.execute("SELECT COALESCE(SUM(amount),0) FROM revenue_events").fetchone()[0]
-        revenue["24h"] = rdb.execute("SELECT COALESCE(SUM(amount),0) FROM revenue_events WHERE timestamp >= datetime('now', '-24 hours')").fetchone()[0]
-        revenue["7d"] = rdb.execute("SELECT COALESCE(SUM(amount),0) FROM revenue_events WHERE timestamp >= datetime('now', '-7 days')").fetchone()[0]
-        rdb.close()
-
-    return render_template("dashboard.html",
-        agents=agents_data,
-        inbox=inbox,
-        logs=logs,
-        resources=resources,
-        plans=plans,
-        revenue=revenue,
-        now=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
+    return render_template("dashboard.html")
 
 
 @app.route("/agent/<name>")
 def agent_detail(name):
-    db = get_system_db()
-    agent = None
-    plans = []
-    inbox = []
-    mail_count = 0
-    if db:
-        row = db.execute("SELECT * FROM agent_registry WHERE agent_name = ?", (name,)).fetchone()
-        if row:
-            agent = dict(row)
-        plans = [dict(r) for r in db.execute(
-            "SELECT * FROM agent_plans WHERE agent_name = ? ORDER BY created_at DESC LIMIT 20", (name,)
-        ).fetchall()]
-        inbox = [dict(r) for r in db.execute(
-            "SELECT * FROM agent_inbox WHERE agent_name = ? ORDER BY created_at DESC LIMIT 20", (name,)
-        ).fetchall()]
-        mail_count = db.execute(
-            "SELECT COUNT(*) as c FROM agent_inbox WHERE agent_name = ? AND read = 0", (name,)
-        ).fetchone()["c"]
-        db.close()
-
-    if not agent:
-        return "Agent not found", 404
-
-    logs = get_agent_logs(name, 100)
-    build_count = get_build_count(name)
-    latest_build = get_latest_build(name)
-    build_preview = get_build_preview(name)
-    resource_usage = {}
-    db = get_system_db()
-    if db:
-        row = db.execute(
-            "SELECT COALESCE(AVG(memory_mb),0) as avg_mem, COALESCE(SUM(tokens_used),0) as tok, COALESCE(SUM(api_calls),0) as api FROM resource_usage WHERE agent_name = ? AND timestamp >= datetime('now', '-24 hours')",
-            (name,)
-        ).fetchone()
-        resource_usage = dict(row) if row else {}
-        db.close()
-
-    return render_template("agent_detail.html",
-        agent=agent,
-        logs=logs,
-        plans=plans,
-        inbox=inbox,
-        mail_count=mail_count,
-        build_count=build_count,
-        latest_build=latest_build,
-        build_preview=build_preview,
-        resource_usage=resource_usage,
-        now=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
+    return render_template("agent_detail.html", agent_name=name)
 
 
-@app.route("/agent/<name>/send_advice", methods=["POST"])
+@app.route("/agent/<name>/advise", methods=["POST"])
 def send_advice(name):
     message = request.form.get("message", "").strip()
     if not message:
         return redirect(url_for("agent_detail", name=name))
     db = get_system_db()
     if db:
-        db.execute(
-            "INSERT INTO agent_inbox (agent_name, sender, message, priority) VALUES (?, ?, ?, ?)",
-            (name, "human", message, 5)
-        )
-        db.commit()
-        db.close()
+        try:
+            db.execute(
+                "INSERT INTO agent_inbox (agent_name, sender, message, priority) VALUES (?, ?, ?, ?)",
+                (name, "human", message, 5)
+            )
+            db.commit()
+            db.close()
+        except Exception:
+            db.close()
     return redirect(url_for("agent_detail", name=name))
 
 
 # === API ROUTES ===
-
-@app.route("/api/health")
-def api_health():
-    return "OK"
-
 
 @app.route("/api/status")
 def api_status():
     db = get_system_db()
     agents = []
     if db:
-        agents = [dict(r) for r in db.execute("SELECT agent_name, status, error_count, COALESCE(total_revenue,0) as rev FROM agent_registry").fetchall()]
-        db.close()
+        try:
+            for r in db.execute("SELECT agent_name, status, error_count, COALESCE(total_revenue,0) as rev FROM agent_registry").fetchall():
+                d = dict(r)
+                d["running"] = d["agent_name"] in _running_agents
+                agents.append(d)
+            db.close()
+        except Exception:
+            db.close()
     return jsonify({
         "status": "alive",
         "timestamp": datetime.utcnow().isoformat(),
         "agents": agents,
+        "running_count": len(_running_agents),
     })
 
 
 @app.route("/api/agents")
 def api_agents():
     db = get_system_db()
-    if not db:
-        return jsonify([])
     agents = []
-    for r in db.execute("SELECT * FROM agent_registry ORDER BY created_at ASC").fetchall():
-        d = dict(r)
-        d["build_count"] = get_build_count(d["agent_name"])
-        d["latest_build"] = get_latest_build(d["agent_name"])
-        agents.append(d)
-    db.close()
+    if db:
+        try:
+            for r in db.execute("SELECT * FROM agent_registry ORDER BY created_at ASC").fetchall():
+                d = dict(r)
+                d["build_count"] = get_build_count(d["agent_name"])
+                d["latest_build"] = get_latest_build(d["agent_name"])
+                d["running"] = d["agent_name"] in _running_agents
+                agents.append(d)
+            db.close()
+        except Exception:
+            db.close()
+    unread = get_unread_counts()
+    for a in agents:
+        a["unread"] = unread.get(a["agent_name"], 0)
     return jsonify(agents)
+
+
+@app.route("/api/agent/<name>")
+def api_agent(name):
+    db = get_system_db()
+    agent = None
+    plans = []
+    inbox = []
+    if db:
+        try:
+            row = db.execute("SELECT * FROM agent_registry WHERE agent_name = ?", (name,)).fetchone()
+            if row:
+                agent = dict(row)
+            plans = [dict(r) for r in db.execute(
+                "SELECT * FROM agent_plans WHERE agent_name = ? ORDER BY created_at DESC LIMIT 20", (name,)
+            ).fetchall()]
+            inbox = [dict(r) for r in db.execute(
+                "SELECT * FROM agent_inbox WHERE agent_name = ? ORDER BY created_at DESC LIMIT 20", (name,)
+            ).fetchall()]
+            db.close()
+        except Exception:
+            db.close()
+    if not agent:
+        return jsonify({"error": "not found"}), 404
+    agent["running"] = name in _running_agents
+    agent["build_count"] = get_build_count(name)
+    agent["latest_build"] = get_latest_build(name)
+    agent["build_preview"] = get_build_preview(name)
+    return jsonify({
+        "agent": agent,
+        "plans": plans,
+        "inbox": inbox,
+    })
+
+
+@app.route("/api/logs")
+def api_logs():
+    limit = request.args.get("limit", 50, type=int)
+    agent = request.args.get("agent", "")
+    level = request.args.get("level", "")
+    since = request.args.get("since", "")
+    logs = get_recent_logs(
+        agent_name=agent or None,
+        level=int(level) if level else None,
+        limit=limit,
+        since=since or None,
+    )
+    return jsonify(logs)
+
+
+@app.route("/api/unread")
+def api_unread():
+    return jsonify(get_unread_counts())
+
+
+@app.route("/api/plans")
+def api_plans():
+    return jsonify(get_active_plans())
+
+
+@app.route("/api/agent/<name>/start", methods=["POST"])
+def api_start_agent(name):
+    if name in _running_agents:
+        return jsonify({"success": False, "error": "Already running"})
+    try:
+        proc = subprocess.Popen(
+            ["python", "main.py", "--agent", name],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0,
+        )
+        _running_agents[name] = {"process": proc, "started_at": time.time()}
+        return jsonify({"success": True, "message": f"{name} started"})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/agent/<name>/stop", methods=["POST"])
+def api_stop_agent(name):
+    if name not in _running_agents:
+        return jsonify({"success": False, "error": "Not running"})
+    try:
+        _running_agents[name]["process"].terminate()
+        _running_agents[name]["process"].wait(timeout=10)
+        del _running_agents[name]
+        return jsonify({"success": True, "message": f"{name} stopped"})
+    except Exception as e:
+        try:
+            _running_agents[name]["process"].kill()
+        except Exception:
+            pass
+        _running_agents.pop(name, None)
+        return jsonify({"success": True, "message": f"{name} killed"})
+
+
+@app.route("/api/agent/<name>/restart", methods=["POST"])
+def api_restart_agent(name):
+    api_stop_agent(name)
+    time.sleep(1)
+    return api_start_agent(name)
 
 
 @app.route("/api/advise", methods=["POST"])
@@ -284,41 +320,19 @@ def api_advise():
         return jsonify({"error": "agent_name and message required"}), 400
     db = get_system_db()
     if db:
-        db.execute(
-            "INSERT INTO agent_inbox (agent_name, sender, message, priority) VALUES (?, ?, ?, ?)",
-            (agent_name, "human", message, 5)
-        )
-        db.commit()
-        db.close()
+        try:
+            db.execute(
+                "INSERT INTO agent_inbox (agent_name, sender, message, priority) VALUES (?, ?, ?, ?)",
+                (agent_name, "human", message, 5)
+            )
+            db.commit()
+            db.close()
+        except Exception:
+            db.close()
     return jsonify({"success": True, "sent_to": agent_name})
 
 
-@app.route("/api/logs")
-def api_logs():
-    limit = request.args.get("limit", 50, type=int)
-    agent = request.args.get("agent", "")
-    if agent:
-        logs = get_agent_logs(agent, limit)
-    else:
-        logs = get_all_recent_logs(limit)
-    return jsonify(logs)
-
-
-@app.route("/api/plans")
-def api_plans():
-    db = get_system_db()
-    if not db:
-        return jsonify([])
-    rows = db.execute(
-        "SELECT agent_name, content, created_at FROM agent_plans WHERE plan_type = 'current' AND status = 'active' ORDER BY created_at DESC"
-    ).fetchall()
-    db.close()
-    return jsonify([dict(r) for r in rows])
-
-
-# === MAIN ===
-
-def run_dashboard(port: int = 8080, debug: bool = False):
+def run_dashboard(port=8080, debug=False):
     print(f"Dashboard running on http://0.0.0.0:{port}")
     app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)
 
