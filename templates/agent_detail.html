@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ agent.agent_name }} - Super Agent Dashboard</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0d1117; color:#c9d1d9; padding:20px; }
+.container { max-width:1200px; margin:0 auto; }
+h1 { color:#58a6ff; font-size:1.5rem; }
+.back { color:#8b949e; font-size:0.9rem; margin-bottom:16px; display:block; }
+.back:hover { color:#58a6ff; }
+.time { color:#8b949e; font-size:0.85rem; float:right; }
+h2 { color:#f0f6fc; font-size:1.1rem; margin-bottom:12px; border-bottom:1px solid #30363d; padding-bottom:8px; }
+.card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; margin-bottom:16px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+@media (max-width:768px) { .grid2 { grid-template-columns:1fr; } }
+table { width:100%; border-collapse:collapse; font-size:0.85rem; }
+th { text-align:left; color:#8b949e; padding:6px 8px; border-bottom:1px solid #30363d; font-weight:500; }
+td { padding:6px 8px; border-bottom:1px solid #21262d; vertical-align:top; }
+.badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:0.75rem; font-weight:600; }
+.badge-green { background:#1b4126; color:#3fb950; }
+.badge-red { background:#4e1a1a; color:#f85149; }
+.badge-yellow { background:#4d3a0f; color:#d29922; }
+.log-msg { font-family:'SF Mono',monospace; font-size:0.8rem; color:#8b949e; }
+.log-debug { color:#8b949e; }
+.log-info { color:#c9d1d9; }
+.log-action { color:#3fb950; }
+.log-warn { color:#d29922; }
+.log-error { color:#f85149; }
+.log-revenue { color:#d2a8ff; }
+.log-cta { color:#f85149; font-weight:600; }
+.stat-value { font-size:1.3rem; font-weight:600; }
+.stat-label { font-size:0.8rem; color:#8b949e; }
+textarea { width:100%; background:#0d1117; border:1px solid #30363d; border-radius:6px; color:#c9d1d9; padding:8px; font-family:'SF Mono',monospace; font-size:0.85rem; resize:vertical; min-height:60px; }
+textarea:focus { outline:none; border-color:#58a6ff; }
+.btn { background:#238636; border:0; color:#fff; padding:8px 16px; border-radius:6px; cursor:pointer; font-size:0.85rem; margin-top:8px; }
+.btn:hover { background:#2ea043; }
+pre { background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:12px; font-size:0.8rem; max-height:300px; overflow:auto; color:#c9d1d9; }
+.mail-item { padding:8px 0; border-bottom:1px solid #21262d; }
+.mail-item:last-child { border:0; }
+.mail-sender { color:#58a6ff; font-weight:600; }
+.mail-msg { margin-top:4px; color:#c9d1d9; }
+.mail-time { font-size:0.75rem; color:#8b949e; }
+.plan-item { padding:6px 0; border-bottom:1px solid #21262d; }
+.plan-item:last-child { border:0; }
+.footer { text-align:center; color:#484f58; font-size:0.8rem; margin-top:24px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <a href="/" class="back">&larr; Back to Dashboard</a>
+  <h1>{{ agent.agent_name }}</h1>
+  <span class="time">{{ now }}</span>
+
+  <div class="grid2">
+    <div class="card">
+      <h2>Status</h2>
+      {% set cls = {'running':'badge-green','idle':'badge-yellow','stopped':'badge-red'}.get(agent.status, 'badge-yellow') %}
+      <p><span class="badge {{ cls }}">{{ agent.status }}</span></p>
+      <p style="margin-top:8px;color:#8b949e;font-size:0.85rem;">
+        Income: {{ agent.income_methods[:80] }}...<br>
+        Builds: <strong>{{ build_count }}</strong> &middot; Errors: <strong>{{ agent.error_count }}</strong><br>
+        Revenue: <strong style="color:#d2a8ff;">${{ "%.2f"|format(agent.total_revenue) }}</strong><br>
+        Class: {{ agent.class_path.split('.')[-1] }}<br>
+        Created: {{ agent.created_at[:19] if agent.created_at else '?' }}<br>
+        Last Active: {{ agent.last_active[:19] if agent.last_active else '?' }}
+      </p>
+    </div>
+    <div class="card">
+      <h2>Resources (24h)</h2>
+      <div class="grid2" style="gap:8px;">
+        <div class="stat"><div class="stat-value">{{ resource_usage.get('avg_mem', 0)|int }} MB</div><div class="stat-label">Avg Memory</div></div>
+        <div class="stat"><div class="stat-value">{{ resource_usage.get('tok', 0) }}</div><div class="stat-label">Tokens</div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Inbox -->
+  <div class="card">
+    <h2>Send Advice to {{ agent.agent_name }}</h2>
+    <form action="/agent/{{ agent.agent_name }}/send_advice" method="POST">
+      <textarea name="message" placeholder="Type your advice or instruction for this agent..."></textarea>
+      <button type="submit" class="btn">Send to {{ agent.agent_name }}</button>
+    </form>
+    {% if inbox %}
+    <h2 style="margin-top:16px;">Message History ({{ mail_count }} unread)</h2>
+    {% for m in inbox %}
+    <div class="mail-item">
+      <div class="mail-sender">{{ m.sender }} {% if not m.read %}<span class="badge badge-red">NEW</span>{% endif %}</div>
+      <div class="mail-msg">{{ m.message }}</div>
+      <div class="mail-time">{{ m.created_at[:19] if m.created_at else '' }}</div>
+    </div>
+    {% endfor %}
+    {% endif %}
+  </div>
+
+  <!-- Plans -->
+  <div class="card">
+    <h2>Plans</h2>
+    {% if plans %}
+    {% for p in plans %}
+    <div class="plan-item">
+      <span style="color:{{ '#'~p.id|string }}">{{ p.plan_type }}</span>:
+      <span style="color:#c9d1d9;">{{ p.content[:120] }}</span>
+      <span style="color:#8b949e;font-size:0.8rem;">&middot; {{ p.created_at[:19] if p.created_at else '' }}</span>
+    </div>
+    {% endfor %}
+    {% else %}
+    <div style="color:#8b949e;">No plans recorded yet</div>
+    {% endif %}
+  </div>
+
+  <!-- Latest Build -->
+  {% if latest_build %}
+  <div class="card">
+    <h2>Latest Build: {{ latest_build }}</h2>
+    <pre>{{ build_preview }}</pre>
+  </div>
+  {% endif %}
+
+  <!-- Logs -->
+  <div class="card">
+    <h2>Recent Logs (last 100)</h2>
+    <table>
+      <tr><th>Time</th><th>Level</th><th>Message</th></tr>
+      {% set lv_map = {10:'DEBUG',20:'INFO',25:'ACTION',30:'WARN',40:'ERROR',45:'REVENUE',50:'CTA'} %}
+      {% set lc_map = {10:'log-debug',20:'log-info',25:'log-action',30:'log-warn',40:'log-error',45:'log-revenue',50:'log-cta'} %}
+      {% for l in logs %}
+      <tr class="{{ lc_map.get(l.level, 'log-info') }}">
+        <td style="white-space:nowrap;">{{ l.timestamp[:19] if l.timestamp else '' }}</td>
+        <td>{{ lv_map.get(l.level, l.level) }}</td>
+        <td class="log-msg">{{ l.message[:150] }}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  <p class="footer"><a href="/">Back to Dashboard</a></p>
+</div>
+</body>
+</html>

@@ -12,8 +12,7 @@ from log_system.agent_logger import AgentLogger, LogLevel
 class BaseAgent(ABC):
     """Base class for build-oriented agents.
 
-    Instead of think->act->reflect cycles that burn LLM tokens on planning,
-    agents focus on BUILDING real output files (bots, websites, scripts).
+    Each cycle: check inbox -> build -> report plan -> log.
     """
 
     BUILD_DIR = "build_output"
@@ -29,10 +28,35 @@ class BaseAgent(ABC):
         self.cycle_count = 0
         self.build_dir = os.path.join(self.BUILD_DIR, agent_name)
         os.makedirs(self.build_dir, exist_ok=True)
+        self._current_plan = None
+        self._last_inbox_check = 0
 
     @abstractmethod
     def get_income_methods(self) -> str:
         pass
+
+    def check_inbox(self):
+        """Read unread messages from human/SuperAgent."""
+        from master.system_store import SystemStore
+        store = SystemStore()
+        mail = store.get_agent_mail(self.name)
+        for msg in mail:
+            advice = f"[{msg['sender']}] {msg['message']}"
+            self.log.info(f"Advice from {msg['sender']}: {msg['message'][:100]}",
+                         category="inbox")
+            self._process_advice(msg)
+            store.mark_mail_read(msg["id"])
+
+    def _process_advice(self, msg: dict):
+        """Override this to handle human advice. Default: log it."""
+        pass
+
+    def report_plan(self, plan: str):
+        """Report current plan to SystemStore."""
+        from master.system_store import SystemStore
+        store = SystemStore()
+        store.set_plan(self.name, "current", plan)
+        self._current_plan = plan
 
     def build(self) -> dict:
         """Override this. Create a real output file.
@@ -40,11 +64,18 @@ class BaseAgent(ABC):
         Returns: {"file": "path/to/file", "summary": "what was built", "revenue": 0.0}
         Return None/empty dict to skip this cycle.
         """
+        self.report_plan("idle — no build defined")
         return None
 
     def run_cycle(self, context: dict = None) -> dict:
-        """One build cycle. No plan logging, no memory overhead."""
+        """One build cycle: check inbox -> build -> report plan."""
         self.cycle_count += 1
+
+        if self.cycle_count % 5 == 0:
+            self.check_inbox()
+
+        self.report_plan(self.get_income_methods()[:80])
+
         result = self.build()
         if result and result.get("file"):
             self.log.action(f"Built: {os.path.basename(result['file'])}",
@@ -60,6 +91,7 @@ class BaseAgent(ABC):
     def run_loop(self, max_cycles: int = None):
         self.running = True
         logger.info(f"Agent [{self.name}] started")
+        self.report_plan("starting up")
         try:
             while self.running:
                 if max_cycles and self.cycle_count >= max_cycles:

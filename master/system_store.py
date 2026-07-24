@@ -90,8 +90,29 @@ class SystemStore:
                 success BOOLEAN DEFAULT 1
             );
 
+            CREATE TABLE IF NOT EXISTS agent_inbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name TEXT NOT NULL,
+                sender TEXT NOT NULL,
+                message TEXT NOT NULL,
+                priority INTEGER DEFAULT 1,
+                read INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_plans (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name TEXT NOT NULL,
+                plan_type TEXT NOT NULL,
+                content TEXT NOT NULL,
+                status TEXT DEFAULT 'active',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
             CREATE INDEX IF NOT EXISTS idx_registry_status ON agent_registry(status);
             CREATE INDEX IF NOT EXISTS idx_resource_agent ON resource_usage(agent_name);
+            CREATE INDEX IF NOT EXISTS idx_inbox_agent ON agent_inbox(agent_name);
+            CREATE INDEX IF NOT EXISTS idx_plans_agent ON agent_plans(agent_name);
         """)
         self._conn.commit()
 
@@ -311,7 +332,65 @@ class SystemStore:
         )
         return [dict(r) for r in cur.fetchall()]
 
-    def close(self):
+    # === AGENT INBOX (human/SuperAgent -> agent messages) ===
+
+    def send_to_agent(self, agent_name: str, sender: str, message: str, priority: int = 1):
+        self._conn.execute(
+            "INSERT INTO agent_inbox (agent_name, sender, message, priority) VALUES (?, ?, ?, ?)",
+            (agent_name, sender, message, priority)
+        )
+        self._conn.commit()
+        logger.info(f"Inbox: {sender} -> {agent_name}: {message[:80]}")
+
+    def get_agent_mail(self, agent_name: str) -> list[dict]:
+        cur = self._conn.execute(
+            "SELECT * FROM agent_inbox WHERE agent_name = ? AND read = 0 ORDER BY priority DESC, created_at ASC",
+            (agent_name,)
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def mark_mail_read(self, msg_id: int):
+        self._conn.execute("UPDATE agent_inbox SET read = 1 WHERE id = ?", (msg_id,))
+        self._conn.commit()
+
+    def get_inbox_summary(self) -> list[dict]:
+        cur = self._conn.execute("""
+            SELECT agent_name, COUNT(*) as unread
+            FROM agent_inbox WHERE read = 0
+            GROUP BY agent_name ORDER BY unread DESC
+        """)
+        return [dict(r) for r in cur.fetchall()]
+
+    # === AGENT PLANS ===
+
+    def set_plan(self, agent_name: str, plan_type: str, content: str):
+        self._conn.execute(
+            "INSERT INTO agent_plans (agent_name, plan_type, content, status) VALUES (?, ?, ?, 'active')",
+            (agent_name, plan_type, content)
+        )
+        self._conn.commit()
+
+    def get_agent_plans(self, agent_name: str, limit: int = 10) -> list[dict]:
+        cur = self._conn.execute(
+            "SELECT * FROM agent_plans WHERE agent_name = ? ORDER BY created_at DESC LIMIT ?",
+            (agent_name, limit)
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_all_current_plans(self) -> list[dict]:
+        cur = self._conn.execute("""
+            SELECT agent_name, content, created_at
+            FROM agent_plans WHERE plan_type = 'current' AND status = 'active'
+            ORDER BY created_at DESC
+        """)
+        return [dict(r) for r in cur.fetchall()]
+
+    def complete_plan(self, agent_name: str, plan_id: int):
+        self._conn.execute(
+            "UPDATE agent_plans SET status = 'completed' WHERE id = ? AND agent_name = ?",
+            (plan_id, agent_name)
+        )
+        self._conn.commit()
         if hasattr(self._local, "conn") and self._local.conn:
             self._local.conn.close()
             self._local.conn = None

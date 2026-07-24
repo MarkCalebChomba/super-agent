@@ -1,0 +1,16 @@
+{
+  "report": "SaaS product pricing comparison",
+  "timestamp": "20260724_025640",
+  "data_points": 50,
+  "findings": [
+    "Growing demand for saas product pricing comparison skills",
+    "Average rates increasing 15% YoY",
+    "Remote positions dominate the market"
+  ],
+  "sources": [
+    "upwork.com",
+    "linkedin.com",
+    "indeed.com"
+  ],
+  "estimated_value": 49.99
+}

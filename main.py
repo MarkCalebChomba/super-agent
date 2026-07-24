@@ -25,17 +25,17 @@ from db.init_db import init_database
 
 
 def start_health_server(port: int = 8080):
-    """Start health server in a daemon thread for cron-job.org pings."""
+    """Start web dashboard server in a daemon thread."""
     try:
-        from health_server import run_health_server
+        from dashboard_app import run_dashboard
         import threading
-        thread = threading.Thread(target=run_health_server, args=(port,),
-                                  daemon=True, name="health-server")
+        thread = threading.Thread(target=run_dashboard, args=(port,),
+                                  daemon=True, name="dashboard")
         thread.start()
-        logger.info(f"Health server running on port {port}")
+        logger.info(f"Dashboard running on port {port}")
         return thread
     except Exception as e:
-        logger.warning(f"Health server not started: {e}")
+        logger.warning(f"Dashboard not started: {e}")
 
 
 def get_agent_class(name: str):
@@ -137,8 +137,8 @@ def main():
     elif args.dashboard:
         port = int(os.getenv("PORT", "8080"))
         logger.info(f"Starting web dashboard on port {port}...")
-        from health_server import run_health_server
-        run_health_server(port=port)
+        from dashboard_app import run_dashboard
+        run_dashboard(port=port)
     elif args.agent:
         run_agent(args.agent)
     else:
