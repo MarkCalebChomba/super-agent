@@ -23,6 +23,7 @@ def seed_agents():
         return
     inst_dir = Path("instructions")
     if not inst_dir.exists():
+        print("WARNING: instructions/ directory not found", flush=True)
         return
     count = 0
     for f in sorted(inst_dir.glob("*.json")):
@@ -31,14 +32,18 @@ def seed_agents():
             continue
         try:
             inst = json.loads(f.read_text())
-            class_path = f"evolving_agent.EvolvingAgent"
             income = inst.get("income_methods", inst.get("genesis_context", {}).get("primary_income", ""))
-            store.register_agent(name, class_path, income_methods=income)
-            count += 1
-        except Exception:
-            pass
-    if count:
-        print(f"Seeded {count} agents from instructions/")
+            ok = store.register_agent(name, "evolving_agent.EvolvingAgent", income_methods=income)
+            if ok:
+                count += 1
+            else:
+                print(f"  Failed to register {name}", flush=True)
+        except Exception as e:
+            print(f"  Error registering {name}: {e}", flush=True)
+    print(f"Seeded {count} agents from instructions/", flush=True)
+
+# Seed agents on module load so they appear on first request
+seed_agents()
 
 def get_sys_db():
     p = DATA_DIR / "system.db"
