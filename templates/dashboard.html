@@ -117,6 +117,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 let currentAgent = null;
 let agents = {};
 let logSources = [];
+let currentTab = 'chat';
 
 function $(id){return document.getElementById(id)}
 
@@ -183,15 +184,16 @@ async function refreshAgent(){
   $('btn-restart').style.display = 'inline-block';
   const panel = $('detail-panel');
   panel.innerHTML = renderAgentDetail(agent, inst, chat, builds, logs);
+  if(currentTab) switchTab(null, currentTab);
 }
 
 function renderAgentDetail(agent, inst, chat, builds, logs){
   let html = '<div class="tabs">'+
-    '<div class="tab active" onclick="switchTab(this,\'chat\')">Chat History</div>'+
-    '<div class="tab" onclick="switchTab(this,\'instructions\')">Instructions</div>'+
-    '<div class="tab" onclick="switchTab(this,\'builds\')">Builds ('+(agent.build_count||0)+')</div>'+
-    '<div class="tab" onclick="switchTab(this,\'logs\')">Logs</div>'+
-    '<div class="tab" onclick="switchTab(this,\'advise\')">Send Advice</div>'+
+    '<div class="tab" data-tab="chat" onclick="switchTab(this,\'chat\')">Chat History</div>'+
+    '<div class="tab" data-tab="instructions" onclick="switchTab(this,\'instructions\')">Instructions</div>'+
+    '<div class="tab" data-tab="builds" onclick="switchTab(this,\'builds\')">Builds ('+(agent.build_count||0)+')</div>'+
+    '<div class="tab" data-tab="logs" onclick="switchTab(this,\'logs\')">Logs</div>'+
+    '<div class="tab" data-tab="advise" onclick="switchTab(this,\'advise\')">Send Advice</div>'+
     '</div>';
 
   // Chat tab
@@ -328,9 +330,11 @@ function renderAgentDetail(agent, inst, chat, builds, logs){
 }
 
 function switchTab(el, tabId){
+  if(tabId) currentTab = tabId;
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-  el.classList.add('active');
+  const tabEl = el || document.querySelector('.tab[data-tab="'+tabId+'"]');
+  if(tabEl) tabEl.classList.add('active');
   const tc = document.getElementById('tab-'+tabId);
   if(tc) tc.classList.add('active');
 }

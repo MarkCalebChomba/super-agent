@@ -16,7 +16,7 @@
     "PlatformMonetizer",
     "Hermes"
   ],
-  "llm_preference": "openrouter",
+  "llm_preference": "nvidia",
   "consolidation_interval_cycles": 10,
   "log_level": "DEBUG",
   "check_interval_seconds": 15

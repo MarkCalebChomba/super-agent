@@ -149,20 +149,6 @@
           "Proper code attribution"
         ]
       }
-    },
-    {
-      "id": "openrouter_key",
-      "type": "api_key",
-      "description": "OpenRouter API key for LLM fallback when Hermes is unavailable",
-      "required": true,
-      "self_provisionable": false,
-      "execution_mode": "hermes",
-      "fields": [
-        "api_key"
-      ],
-      "env_keys": [
-        "OPENROUTER_API_KEY"
-      ]
     }
   ],
   "sub_agents": {},
@@ -170,63 +156,63 @@
     {
       "cycle": 1,
       "timestamp": "2026-07-24T12:23:52.825563",
-      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "lesson": "",
       "platform": null,
       "success": false
     },
     {
       "cycle": 2,
       "timestamp": "2026-07-24T12:24:26.963252",
-      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "lesson": "",
       "platform": null,
       "success": false
     },
     {
       "cycle": 3,
       "timestamp": "2026-07-24T12:30:10.504182",
-      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "lesson": "",
       "platform": null,
       "success": false
     },
     {
       "cycle": 4,
       "timestamp": "2026-07-24T12:30:40.507834",
-      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "lesson": "",
       "platform": null,
       "success": false
     },
     {
       "cycle": 5,
       "timestamp": "2026-07-24T13:24:48.482749",
-      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "lesson": "",
       "platform": null,
       "success": false
     },
     {
       "cycle": 6,
       "timestamp": "2026-07-24T13:25:18.489124",
-      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "lesson": "",
       "platform": null,
       "success": false
     },
     {
       "cycle": 7,
       "timestamp": "2026-07-24T13:25:48.493698",
-      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "lesson": "",
       "platform": null,
       "success": false
     },
     {
       "cycle": 8,
       "timestamp": "2026-07-24T13:26:18.497879",
-      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "lesson": "",
       "platform": null,
       "success": false
     },
     {
       "cycle": 9,
       "timestamp": "2026-07-24T13:26:48.505792",
-      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "lesson": "",
       "platform": null,
       "success": false
     }

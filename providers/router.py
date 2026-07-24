@@ -69,7 +69,7 @@ class LLMRouter:
     OLLAMA_BASE = "http://localhost:11434"
 
     def __init__(self):
-        self.nvidia_key = os.getenv("NVIDIA_API_KEY", "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")
+        self.nvidia_key = os.getenv("NVIDIA_API_KEY", "")
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
         self.openrouter_key_2 = os.getenv("OPENROUTER_API_KEY_2", "")
         self.groq_key = os.getenv("GROQ_API_KEY", "")
