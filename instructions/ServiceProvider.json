@@ -1,0 +1,16 @@
+{
+  "name": "ServiceProvider",
+  "seed_instruction": "Make money by providing digital services and consulting",
+  "genesis_prompt": "Make money by providing digital services and consulting",
+  "instructions": [],
+  "resources_required": [],
+  "sub_agents": {},
+  "evolutions": [],
+  "performance": {
+    "cycles_run": 0,
+    "successful_outputs": 0,
+    "failed_outputs": 0,
+    "resources_provisioned": 0
+  },
+  "platform_rules": {}
+}

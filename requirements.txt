@@ -2,23 +2,22 @@
 loguru>=0.7.2
 requests>=2.31.0
 python-dotenv>=1.0.0
-
-# Web dashboard
 flask>=3.0.0
-gunicorn>=22.0.0
+flask-cors>=4.0.0
 
-# Web scraping & browser automation
+# Web scraping
 beautifulsoup4>=4.12.2
 curl-cffi>=0.5.10
 
-# Resource monitoring (memory tracking)
+# Anti-detection browser (primary - best for agent stealth)
+camoufox>=0.1.0
+
+# Fallback browser automation (if camoufox unavailable)
+playwright>=1.40.0
+playwright-stealth>=1.0.6
+
+# Resource monitoring
 psutil>=5.9.0
-
-# Anti-detection browser (optional, uncomment if needed)
-# undetected-chromedriver>=3.5.4
-# camoufox>=0.1.0
-
-# SQLite3 is built-in
 
 # Testing
 pytest>=8.0.0

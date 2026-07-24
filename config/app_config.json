@@ -13,7 +13,8 @@
     "DeFiOptimizer",
     "DataArbitrageur",
     "ServiceProvider",
-    "PlatformMonetizer"
+    "PlatformMonetizer",
+    "Hermes"
   ],
   "llm_preference": "openrouter",
   "consolidation_interval_cycles": 10,

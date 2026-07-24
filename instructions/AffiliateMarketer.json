@@ -1,0 +1,16 @@
+{
+  "name": "AffiliateMarketer",
+  "seed_instruction": "Make money through affiliate marketing commissions",
+  "genesis_prompt": "Make money through affiliate marketing commissions",
+  "instructions": [],
+  "resources_required": [],
+  "sub_agents": {},
+  "evolutions": [],
+  "performance": {
+    "cycles_run": 0,
+    "successful_outputs": 0,
+    "failed_outputs": 0,
+    "resources_provisioned": 0
+  },
+  "platform_rules": {}
+}

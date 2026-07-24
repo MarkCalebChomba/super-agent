@@ -1,327 +1,298 @@
-"""Full-featured Flask dashboard for agent system monitoring and control.
-
-Endpoints:
-    GET  /              - Main dashboard (all agents, resources, plans)
-    GET  /agent/<name>  - Per-agent detail (logs, plan, inbox, files)
-    POST /api/advise    - Send advice to an agent
-    GET  /api/agents    - JSON: all agents
-    GET  /api/health    - JSON: system health
-"""
-
-import os
-import json
-import sqlite3
+"""Super Agent Dashboard — monitor, control, chat with all agents."""
+import os, json, time, threading, sqlite3
 from pathlib import Path
 from datetime import datetime
-from functools import lru_cache
-from flask import Flask, render_template, request, jsonify, redirect, url_for
+from flask import Flask, render_template, request, jsonify, Response, abort, stream_with_context
+from live_tracker import get_all as get_live_data, update as update_live
 
 app = Flask(__name__)
-
 DATA_DIR = Path("data")
-LOG_DIR = DATA_DIR / "logs"
 BUILD_DIR = Path("build_output")
+_agent_threads = {}
+_agent_instances = {}
 
+def get_store():
+    from master.system_store import SystemStore
+    return SystemStore()
 
-def get_central_log():
-    db = LOG_DIR / "central_log.db"
-    if not db.exists():
-        return None
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
-    return conn
+def get_sys_db():
+    p = DATA_DIR / "system.db"
+    if not p.exists(): return None
+    c = sqlite3.connect(str(p)); c.row_factory = sqlite3.Row; return c
 
+def get_inst(path: str) -> dict:
+    p = Path("instructions") / f"{path}.json"
+    if p.exists(): return json.loads(p.read_text())
+    if "/" in path:
+        sub = path.split("/")[-1]
+        p2 = Path("instructions") / f"{sub}.json"
+        if p2.exists(): return json.loads(p2.read_text())
+    return {}
 
-def get_system_db():
-    db = DATA_DIR / "system.db"
-    if not db.exists():
-        return None
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
-    return conn
+def get_build_count(a: str) -> int:
+    d = BUILD_DIR / a
+    return len([f for f in d.iterdir() if f.is_file()]) if d.exists() else 0
 
-
-def get_revenue_db():
-    db = DATA_DIR / "revenue.db"
-    if not db.exists():
-        return None
-    conn = sqlite3.connect(str(db))
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def get_build_count(agent_name: str) -> int:
-    agent_dir = BUILD_DIR / agent_name
-    if agent_dir.exists():
-        return len([f for f in agent_dir.iterdir() if f.is_file()])
-    return 0
-
-
-def get_latest_build(agent_name: str) -> str:
-    agent_dir = BUILD_DIR / agent_name
-    if agent_dir.exists():
-        files = sorted(agent_dir.iterdir(), key=os.path.getmtime, reverse=True)
-        if files:
-            return files[0].name
+def get_latest_build(a: str) -> str:
+    d = BUILD_DIR / a
+    if d.exists():
+        fs = sorted(d.iterdir(), key=os.path.getmtime, reverse=True)
+        return fs[0].name if fs else ""
     return ""
 
+# ── Agent Thread Manager ──────────────────────────────────────────
 
-def get_build_preview(agent_name: str) -> str:
-    agent_dir = BUILD_DIR / agent_name
-    if agent_dir.exists():
-        files = sorted(agent_dir.iterdir(), key=os.path.getmtime, reverse=True)
-        if files:
+def start_agent_thread(name: str) -> dict:
+    if name in _agent_threads and _agent_threads[name].is_alive():
+        return {"success": False, "error": "already running"}
+    inst = get_inst(name)
+    if not inst:
+        return {"success": False, "error": "no instruction set"}
+    try:
+        from evolving_agent import EvolvingAgent
+        agent = EvolvingAgent(name)
+        _agent_instances[name] = agent
+
+        def _run():
             try:
-                content = files[0].read_text(errors="replace")
-                return content[:300]
+                store = get_store()
+                store.update_agent_status(name, "running")
+                agent.run_loop()
             except Exception:
-                return "(binary or unreadable)"
-    return ""
+                pass
+            finally:
+                if name in _agent_threads:
+                    del _agent_threads[name]
+                if name in _agent_instances:
+                    del _agent_instances[name]
+                try: store.update_agent_status(name, "idle")
+                except: pass
 
+        t = threading.Thread(target=_run, daemon=True, name=f"agent-{name}")
+        t.start()
+        _agent_threads[name] = t
+        return {"success": True, "status": "started"}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
-def get_agent_logs(agent_name: str, limit: int = 50) -> list:
-    cl = get_central_log()
-    if not cl:
-        return []
-    rows = cl.execute(
-        "SELECT level, message, timestamp FROM central_log WHERE agent_name = ? ORDER BY id DESC LIMIT ?",
-        (agent_name, limit)
-    ).fetchall()
-    cl.close()
-    return [dict(r) for r in rows]
+def stop_agent_thread(name: str) -> dict:
+    if name not in _agent_instances and name not in _agent_threads:
+        return {"success": False, "error": "not running"}
+    if name in _agent_instances:
+        try:
+            _agent_instances[name].running = False
+        except: pass
+    try:
+        store = get_store()
+        store.update_agent_status(name, "stopped")
+    except: pass
+    return {"success": True, "status": "stopped"}
 
+# ── Log stream ring buffer ────────────────────────────────────────
 
-def get_all_recent_logs(limit: int = 30) -> list:
-    cl = get_central_log()
-    if not cl:
-        return []
-    rows = cl.execute(
-        "SELECT agent_name, level, message, timestamp FROM central_log ORDER BY id DESC LIMIT ?",
-        (limit,)
-    ).fetchall()
-    cl.close()
-    return [dict(r) for r in rows]
+_log_buffer = []
+_log_buffer_lock = threading.Lock()
+_MAX_LOG = 500
 
+def append_log(agent: str, level: str, msg: str):
+    entry = {"agent": agent, "level": level, "msg": msg, "ts": datetime.now().isoformat()}
+    with _log_buffer_lock:
+        _log_buffer.append(entry)
+        if len(_log_buffer) > _MAX_LOG:
+            _log_buffer[:50] = []
 
-def get_resource_summary() -> dict:
-    db = get_system_db()
-    if not db:
-        return {}
-    row = db.execute("""
-        SELECT COUNT(DISTINCT agent_name) as active_agents,
-               COALESCE(SUM(memory_mb), 0) as total_memory,
-               COALESCE(SUM(tokens_used), 0) as total_tokens,
-               COALESCE(SUM(api_calls), 0) as total_api_calls
-        FROM resource_usage WHERE timestamp >= datetime('now', '-24 hours')
-    """).fetchone()
-    db.close()
-    return dict(row) if row else {}
+# Intercept loguru
+try:
+    from loguru import logger as _loguru
+    class _DashboardSink:
+        def write(self, msg): pass
+        def __call__(self, message):
+            try:
+                r = message.record
+                append_log(r.get("name","system"), r["level"].name, r["message"])
+            except: pass
+    _loguru.add(_DashboardSink(), level="DEBUG")
+except: pass
 
-
-# === HTML ROUTES ===
+# ── HTML Routes ───────────────────────────────────────────────────
 
 @app.route("/")
 def index():
-    db = get_system_db()
-    agents_data = []
-    if db:
-        rows = db.execute("SELECT * FROM agent_registry ORDER BY created_at ASC").fetchall()
-        for r in rows:
-            d = dict(r)
-            d["build_count"] = get_build_count(d["agent_name"])
-            d["latest_build"] = get_latest_build(d["agent_name"])
-            agents_data.append(d)
-        db.close()
-
-    # Inbox summary
-    inbox = []
-    if db:
-        rows = db.execute(
-            "SELECT agent_name, COUNT(*) as unread FROM agent_inbox WHERE read = 0 GROUP BY agent_name ORDER BY unread DESC"
-        ).fetchall()
-        inbox = [dict(r) for r in rows]
-
-    logs = get_all_recent_logs(20)
-    resources = get_resource_summary()
-    plans = []
-    if db:
-        rows = db.execute(
-            "SELECT agent_name, content, created_at FROM agent_plans WHERE plan_type = 'current' AND status = 'active' ORDER BY created_at DESC"
-        ).fetchall()
-        plans = [dict(r) for r in rows]
-        db.close()
-
-    revenue = {"total": 0.0, "24h": 0.0, "7d": 0.0}
-    rdb = get_revenue_db()
-    if rdb:
-        revenue["total"] = rdb.execute("SELECT COALESCE(SUM(amount),0) FROM revenue_events").fetchone()[0]
-        revenue["24h"] = rdb.execute("SELECT COALESCE(SUM(amount),0) FROM revenue_events WHERE timestamp >= datetime('now', '-24 hours')").fetchone()[0]
-        revenue["7d"] = rdb.execute("SELECT COALESCE(SUM(amount),0) FROM revenue_events WHERE timestamp >= datetime('now', '-7 days')").fetchone()[0]
-        rdb.close()
-
-    return render_template("dashboard.html",
-        agents=agents_data,
-        inbox=inbox,
-        logs=logs,
-        resources=resources,
-        plans=plans,
-        revenue=revenue,
-        now=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
-
+    return render_template("dashboard.html", now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 @app.route("/agent/<name>")
 def agent_detail(name):
-    db = get_system_db()
-    agent = None
-    plans = []
-    inbox = []
-    mail_count = 0
-    if db:
-        row = db.execute("SELECT * FROM agent_registry WHERE agent_name = ?", (name,)).fetchone()
-        if row:
-            agent = dict(row)
-        plans = [dict(r) for r in db.execute(
-            "SELECT * FROM agent_plans WHERE agent_name = ? ORDER BY created_at DESC LIMIT 20", (name,)
-        ).fetchall()]
-        inbox = [dict(r) for r in db.execute(
-            "SELECT * FROM agent_inbox WHERE agent_name = ? ORDER BY created_at DESC LIMIT 20", (name,)
-        ).fetchall()]
-        mail_count = db.execute(
-            "SELECT COUNT(*) as c FROM agent_inbox WHERE agent_name = ? AND read = 0", (name,)
-        ).fetchone()["c"]
-        db.close()
+    return render_template("agent_detail.html", agent_name=name, now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-    if not agent:
-        return "Agent not found", 404
+@app.route("/build/<name>/<path:filename>")
+def view_build(name, filename):
+    fp = BUILD_DIR / name / filename
+    if not fp.exists(): abort(404)
+    try: content = fp.read_text(errors="replace")
+    except: content = "(binary)"
+    return render_template("build_view.html", agent_name=name, filename=filename, content=content, ext=fp.suffix, now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
-    logs = get_agent_logs(name, 100)
-    build_count = get_build_count(name)
-    latest_build = get_latest_build(name)
-    build_preview = get_build_preview(name)
-    resource_usage = {}
-    db = get_system_db()
-    if db:
-        row = db.execute(
-            "SELECT COALESCE(AVG(memory_mb),0) as avg_mem, COALESCE(SUM(tokens_used),0) as tok, COALESCE(SUM(api_calls),0) as api FROM resource_usage WHERE agent_name = ? AND timestamp >= datetime('now', '-24 hours')",
-            (name,)
-        ).fetchone()
-        resource_usage = dict(row) if row else {}
-        db.close()
+# ── Agent Control API ─────────────────────────────────────────────
 
-    return render_template("agent_detail.html",
-        agent=agent,
-        logs=logs,
-        plans=plans,
-        inbox=inbox,
-        mail_count=mail_count,
-        build_count=build_count,
-        latest_build=latest_build,
-        build_preview=build_preview,
-        resource_usage=resource_usage,
-        now=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    )
+@app.route("/api/agent/<name>/start", methods=["POST"])
+def api_agent_start(name):
+    return jsonify(start_agent_thread(name))
 
+@app.route("/api/agent/<name>/stop", methods=["POST"])
+def api_agent_stop(name):
+    return jsonify(stop_agent_thread(name))
 
-@app.route("/agent/<name>/send_advice", methods=["POST"])
-def send_advice(name):
-    message = request.form.get("message", "").strip()
-    if not message:
-        return redirect(url_for("agent_detail", name=name))
-    db = get_system_db()
-    if db:
-        db.execute(
-            "INSERT INTO agent_inbox (agent_name, sender, message, priority) VALUES (?, ?, ?, ?)",
-            (name, "human", message, 5)
-        )
-        db.commit()
-        db.close()
-    return redirect(url_for("agent_detail", name=name))
+@app.route("/api/agent/<name>/restart", methods=["POST"])
+def api_agent_restart(name):
+    stop_agent_thread(name)
+    time.sleep(0.5)
+    return jsonify(start_agent_thread(name))
 
+# ── Agent Data API ────────────────────────────────────────────────
 
-# === API ROUTES ===
+@app.route("/api/agent/<name>/chat")
+def api_agent_chat(name):
+    limit = request.args.get("limit", 50, type=int)
+    store = get_store()
+    return jsonify(store.get_chat_history(name, limit))
+
+@app.route("/api/agent/<name>/instructions")
+def api_agent_instructions(name):
+    inst = get_inst(name)
+    if not inst: return jsonify({"error": "not found"}), 404
+    return jsonify(inst)
+
+@app.route("/api/agent/<name>/memory")
+def api_agent_memory(name):
+    try:
+        db = DATA_DIR / "memory" / f"{name}_memory.db"
+        if not db.exists(): return jsonify([])
+        c = sqlite3.connect(str(db)); c.row_factory = sqlite3.Row
+        rows = c.execute("SELECT * FROM memory ORDER BY id DESC LIMIT 100").fetchall()
+        c.close()
+        return jsonify([dict(r) for r in rows])
+    except: return jsonify([])
+
+# ── System API ────────────────────────────────────────────────────
+
+@app.route("/api/agents")
+def api_agents():
+    store = get_store()
+    agents = store.get_all_agents()
+    live = get_live_data()
+    for a in agents:
+        a["build_count"] = get_build_count(a["agent_name"])
+        a["latest_build"] = get_latest_build(a["agent_name"])
+        l = live.get(a["agent_name"], {})
+        a["live_input"] = l.get("input", "")
+        a["live_output"] = l.get("output", "")
+        a["thread_alive"] = a["agent_name"] in _agent_threads and _agent_threads[a["agent_name"]].is_alive()
+    return jsonify(agents)
+
+@app.route("/api/live")
+def api_live():
+    store = get_store()
+    agents = store.get_all_agents()
+    live = get_live_data()
+    for a in agents:
+        l = live.get(a["agent_name"], {})
+        a["live_input"] = l.get("input", "")
+        a["live_output"] = l.get("output", "")
+        a["running"] = a["agent_name"] in _agent_threads and _agent_threads[a["agent_name"]].is_alive()
+    inbox_count = 0
+    try: inbox_count = store.get_inbox_summary()
+    except: pass
+    return jsonify({
+        "agents": agents,
+        "timestamp": datetime.now().isoformat(),
+        "threads": {n: t.is_alive() for n, t in _agent_threads.items()},
+    })
+
+@app.route("/api/status")
+def api_status():
+    store = get_store()
+    return jsonify({
+        "status": "alive",
+        "timestamp": datetime.utcnow().isoformat(),
+        "agents": store.get_all_agents(),
+        "threads": {n: t.is_alive() for n, t in _agent_threads.items()},
+    })
+
+@app.route("/api/logs")
+def api_logs():
+    limit = request.args.get("limit", 100, type=int)
+    agent = request.args.get("agent", "")
+    level = request.args.get("level", "")
+    with _log_buffer_lock:
+        logs = list(_log_buffer)
+    if agent: logs = [l for l in logs if l["agent"] == agent]
+    if level: logs = [l for l in logs if l["level"] == level]
+    return jsonify(logs[-limit:])
+
+@app.route("/api/builds/<name>")
+def api_builds(name):
+    d = BUILD_DIR / name
+    if not d.exists(): return jsonify([])
+    fs = sorted(d.iterdir(), key=os.path.getmtime, reverse=True)[:20]
+    r = []
+    for f in fs:
+        try:
+            c = f.read_text(errors="replace")[:500]
+            r.append({"filename": f.name, "timestamp": datetime.fromtimestamp(os.path.getmtime(f)).isoformat(), "preview": c, "size": f.stat().st_size})
+        except: r.append({"filename": f.name, "preview": "", "size": 0})
+    return jsonify(r)
+
+@app.route("/api/advise", methods=["POST"])
+def api_advise():
+    data = request.get_json(force=True)
+    an = data.get("agent_name", "").strip()
+    msg = data.get("message", "").strip()
+    if not an or not msg: return jsonify({"error": "agent_name and message required"}), 400
+    store = get_store()
+    store.send_to_agent(an, "human", msg, 5)
+    return jsonify({"success": True, "sent_to": an})
+
+@app.route("/api/plans")
+def api_plans():
+    store = get_store()
+    return jsonify(store.get_all_current_plans())
+
+@app.route("/api/revenue")
+def api_revenue():
+    rdb = DATA_DIR / "revenue.db"
+    if not rdb.exists(): return jsonify({"total": 0, "24h": 0, "7d": 0})
+    c = sqlite3.connect(str(rdb))
+    t = c.execute("SELECT COALESCE(SUM(amount),0) FROM revenue_events").fetchone()[0]
+    h = c.execute("SELECT COALESCE(SUM(amount),0) FROM revenue_events WHERE timestamp >= datetime('now', '-24 hours')").fetchone()[0]
+    w = c.execute("SELECT COALESCE(SUM(amount),0) FROM revenue_events WHERE timestamp >= datetime('now', '-7 days')").fetchone()[0]
+    c.close()
+    return jsonify({"total": t, "24h": h, "7d": w})
 
 @app.route("/api/health")
 def api_health():
     return "OK"
 
+# ── SSE Stream ────────────────────────────────────────────────────
 
-@app.route("/api/status")
-def api_status():
-    db = get_system_db()
-    agents = []
-    if db:
-        agents = [dict(r) for r in db.execute("SELECT agent_name, status, error_count, COALESCE(total_revenue,0) as rev FROM agent_registry").fetchall()]
-        db.close()
-    return jsonify({
-        "status": "alive",
-        "timestamp": datetime.utcnow().isoformat(),
-        "agents": agents,
-    })
+@app.route("/api/stream/logs")
+def stream_logs():
+    def gen():
+        seen = set()
+        while True:
+            with _log_buffer_lock:
+                for entry in _log_buffer:
+                    eid = id(entry)
+                    if eid not in seen:
+                        seen.add(eid)
+                        yield f"data: {json.dumps(entry)}\n\n"
+            time.sleep(0.5)
+    return Response(stream_with_context(gen()), mimetype="text/event-stream")
 
+# ── Main ──────────────────────────────────────────────────────────
 
-@app.route("/api/agents")
-def api_agents():
-    db = get_system_db()
-    if not db:
-        return jsonify([])
-    agents = []
-    for r in db.execute("SELECT * FROM agent_registry ORDER BY created_at ASC").fetchall():
-        d = dict(r)
-        d["build_count"] = get_build_count(d["agent_name"])
-        d["latest_build"] = get_latest_build(d["agent_name"])
-        agents.append(d)
-    db.close()
-    return jsonify(agents)
-
-
-@app.route("/api/advise", methods=["POST"])
-def api_advise():
-    data = request.get_json(force=True)
-    agent_name = data.get("agent_name", "").strip()
-    message = data.get("message", "").strip()
-    if not agent_name or not message:
-        return jsonify({"error": "agent_name and message required"}), 400
-    db = get_system_db()
-    if db:
-        db.execute(
-            "INSERT INTO agent_inbox (agent_name, sender, message, priority) VALUES (?, ?, ?, ?)",
-            (agent_name, "human", message, 5)
-        )
-        db.commit()
-        db.close()
-    return jsonify({"success": True, "sent_to": agent_name})
-
-
-@app.route("/api/logs")
-def api_logs():
-    limit = request.args.get("limit", 50, type=int)
-    agent = request.args.get("agent", "")
-    if agent:
-        logs = get_agent_logs(agent, limit)
-    else:
-        logs = get_all_recent_logs(limit)
-    return jsonify(logs)
-
-
-@app.route("/api/plans")
-def api_plans():
-    db = get_system_db()
-    if not db:
-        return jsonify([])
-    rows = db.execute(
-        "SELECT agent_name, content, created_at FROM agent_plans WHERE plan_type = 'current' AND status = 'active' ORDER BY created_at DESC"
-    ).fetchall()
-    db.close()
-    return jsonify([dict(r) for r in rows])
-
-
-# === MAIN ===
-
-def run_dashboard(port: int = 8080, debug: bool = False):
+def run_dashboard(port=8080, debug=False):
     print(f"Dashboard running on http://0.0.0.0:{port}")
-    app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)
-
+    app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False, threaded=True)
 
 if __name__ == "__main__":
     import sys

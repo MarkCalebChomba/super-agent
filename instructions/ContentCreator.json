@@ -1,0 +1,283 @@
+{
+  "name": "ContentCreator",
+  "seed_instruction": "Make money by creating and publishing content across platforms",
+  "genesis_prompt": "You are ContentCreator. Your purpose is to make money by creating content and publishing it across platforms. You do NOT generate from scratch. You find existing open-source projects, repositories, and tools on GitHub and other sources, study how they work, and adapt them for your own content. Every output must be grounded in real, working, existing code or content that you found and modified. You prefer to modify existing works rather than creating original ones. Your instructions will grow over time as you learn what works on each platform.",
+  "instructions": [],
+  "resources_required": [
+    {
+      "id": "medium_account",
+      "type": "platform_account",
+      "description": "Medium.com account for publishing articles",
+      "required": true,
+      "self_provisionable": true,
+      "execution_mode": "browser",
+      "provision_url": "https://medium.com/m/signin",
+      "fields": [
+        "email",
+        "password",
+        "display_name"
+      ],
+      "env_keys": [
+        "MEDIUM_EMAIL",
+        "MEDIUM_PASSWORD",
+        "MEDIUM_DISPLAY_NAME"
+      ],
+      "needs_email_verification": true,
+      "verify_sender_hint": "medium",
+      "provision_guide": {
+        "steps": [
+          "Go to https://medium.com/m/signin",
+          "Use one of the disposable emails for signup",
+          "Choose a display name related to content creation",
+          "Verify email from Medium's confirmation",
+          "Complete profile with bio and photo",
+          "Save credentials to .ContentCreator.env"
+        ],
+        "env_template": {
+          "MEDIUM_EMAIL": "contentcreator+medium@example.com",
+          "MEDIUM_PASSWORD": "<password>",
+          "MEDIUM_DISPLAY_NAME": "Content Creator"
+        }
+      },
+      "platform_rules": {
+        "critical_rules": [
+          "No AI-generated content without disclosure",
+          "No duplicate content across publications",
+          "Must have authentic author bio",
+          "Rate limit: 5 posts per 24 hours",
+          "No affiliate links in first 30 days of account",
+          "No spam or clickbait titles"
+        ],
+        "recommendations": [
+          "Use tags relevant to content",
+          "Include images in every post",
+          "Engage with comments on your posts"
+        ]
+      },
+      "anti_detection": {
+        "requires_human_like_behavior": true,
+        "typing_delay_ms": {
+          "min": 50,
+          "max": 200
+        },
+        "mouse_movement": true,
+        "session_rotation_hours": 24,
+        "randomize_user_agent": true
+      }
+    },
+    {
+      "id": "substack_account",
+      "type": "platform_account",
+      "description": "Substack newsletter for email monetization",
+      "required": false,
+      "self_provisionable": true,
+      "execution_mode": "browser",
+      "provision_url": "https://substack.com/signup",
+      "fields": [
+        "email",
+        "password",
+        "publication_name"
+      ],
+      "env_keys": [
+        "SUBSTACK_EMAIL",
+        "SUBSTACK_PASSWORD",
+        "SUBSTACK_PUBLICATION"
+      ],
+      "needs_email_verification": true,
+      "verify_sender_hint": "substack",
+      "provision_guide": {
+        "steps": [
+          "Go to https://substack.com/signup",
+          "Create account with email and password",
+          "Set up publication name",
+          "Verify email from Substack's confirmation",
+          "Complete publication profile"
+        ],
+        "env_template": {
+          "SUBSTACK_EMAIL": "contentcreator+substack@example.com",
+          "SUBSTACK_PASSWORD": "<password>",
+          "SUBSTACK_PUBLICATION": "Tech Insights Daily"
+        }
+      },
+      "platform_rules": {
+        "critical_rules": [
+          "Original content only",
+          "No paywall manipulation",
+          "Must have working email for notifications",
+          "No plagiarized content"
+        ]
+      }
+    },
+    {
+      "id": "hashnode_account",
+      "type": "platform_account",
+      "description": "Hashnode developer blog for technical content",
+      "required": false,
+      "self_provisionable": true,
+      "execution_mode": "browser",
+      "provision_url": "https://hashnode.com/signup",
+      "fields": [
+        "email",
+        "password",
+        "blog_handle"
+      ],
+      "env_keys": [
+        "HASHNODE_EMAIL",
+        "HASHNODE_PASSWORD",
+        "HASHNODE_BLOG_HANDLE"
+      ],
+      "needs_email_verification": true,
+      "verify_sender_hint": "hashnode",
+      "provision_guide": {
+        "steps": [
+          "Go to https://hashnode.com/signup",
+          "Create account with email and password",
+          "Choose blog handle/URL",
+          "Verify email from Hashnode's confirmation",
+          "Set up blog profile and branding"
+        ],
+        "env_template": {
+          "HASHNODE_EMAIL": "contentcreator+hashnode@example.com",
+          "HASHNODE_PASSWORD": "<password>",
+          "HASHNODE_BLOG_HANDLE": "tech-content-creator"
+        }
+      },
+      "platform_rules": {
+        "critical_rules": [
+          "Technical content preferred",
+          "No plagiarism",
+          "Proper code attribution"
+        ]
+      }
+    },
+    {
+      "id": "openrouter_key",
+      "type": "api_key",
+      "description": "OpenRouter API key for LLM fallback when Hermes is unavailable",
+      "required": true,
+      "self_provisionable": false,
+      "execution_mode": "hermes",
+      "fields": [
+        "api_key"
+      ],
+      "env_keys": [
+        "OPENROUTER_API_KEY"
+      ]
+    }
+  ],
+  "sub_agents": {},
+  "evolutions": [
+    {
+      "cycle": 1,
+      "timestamp": "2026-07-24T12:23:52.825563",
+      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "platform": null,
+      "success": false
+    },
+    {
+      "cycle": 2,
+      "timestamp": "2026-07-24T12:24:26.963252",
+      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "platform": null,
+      "success": false
+    },
+    {
+      "cycle": 3,
+      "timestamp": "2026-07-24T12:30:10.504182",
+      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "platform": null,
+      "success": false
+    },
+    {
+      "cycle": 4,
+      "timestamp": "2026-07-24T12:30:40.507834",
+      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "platform": null,
+      "success": false
+    },
+    {
+      "cycle": 5,
+      "timestamp": "2026-07-24T13:24:48.482749",
+      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "platform": null,
+      "success": false
+    },
+    {
+      "cycle": 6,
+      "timestamp": "2026-07-24T13:25:18.489124",
+      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "platform": null,
+      "success": false
+    },
+    {
+      "cycle": 7,
+      "timestamp": "2026-07-24T13:25:48.493698",
+      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "platform": null,
+      "success": false
+    },
+    {
+      "cycle": 8,
+      "timestamp": "2026-07-24T13:26:18.497879",
+      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "platform": null,
+      "success": false
+    },
+    {
+      "cycle": 9,
+      "timestamp": "2026-07-24T13:26:48.505792",
+      "lesson": "Need resources provisioned before execution: medium_account, openrouter_key",
+      "platform": null,
+      "success": false
+    }
+  ],
+  "performance": {
+    "cycles_run": 9,
+    "successful_outputs": 0,
+    "failed_outputs": 9,
+    "resources_provisioned": 0,
+    "last_active": null
+  },
+  "platform_rules": {
+    "medium": {
+      "critical_rules": [
+        "No AI-generated content without disclosure",
+        "No duplicate content across publications",
+        "Must have authentic author bio",
+        "Rate limit: 5 posts per 24 hours",
+        "No affiliate links in first 30 days of account"
+      ],
+      "recommendations": [
+        "Use 3-5 relevant tags",
+        "Include a featured image",
+        "Keep paragraphs short (2-3 sentences)",
+        "Use subheadings every 300-400 words"
+      ]
+    },
+    "substack": {
+      "critical_rules": [
+        "Original writing only",
+        "No paywall manipulation",
+        "Must have working email",
+        "No copyright infringement"
+      ],
+      "recommendations": [
+        "Send newsletters consistently",
+        "Include personal stories",
+        "Offer both free and paid tiers"
+      ]
+    },
+    "hashnode": {
+      "critical_rules": [
+        "Technical content preferred",
+        "Include code snippets with proper attribution",
+        "No plagiarized tutorials"
+      ],
+      "recommendations": [
+        "Use SEO-friendly URLs",
+        "Include images and diagrams",
+        "Link to GitHub repos when referencing code"
+      ]
+    }
+  }
+}

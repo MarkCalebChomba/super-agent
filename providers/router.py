@@ -22,11 +22,44 @@ MODEL_TIERS = {
     },
 }
 
+
+_HERMES_HF_CLIENT = None
+
+def _get_hermes_hf() -> Optional[object]:
+    """Lazy-init the HF Hermes client."""
+    global _HERMES_HF_CLIENT
+    if _HERMES_HF_CLIENT is None:
+        try:
+            from hermes_integration.hermes_hf_client import HermesHFClient
+            _HERMES_HF_CLIENT = HermesHFClient()
+        except Exception:
+            _HERMES_HF_CLIENT = False
+    return _HERMES_HF_CLIENT if _HERMES_HF_CLIENT else None
+
+
+def _try_hermes(prompt: str, system: str,
+                max_tokens: int, temperature: float) -> Optional[str]:
+    """Route through Hermes Agent hosted on Hugging Face Spaces.
+    
+    Hermes (Nous Research, 219k★) handles LLM routing, web search,
+    and research tools remotely. Every agent runs on this.
+    Falls back to local providers if unreachable.
+    """
+    client = _get_hermes_hf()
+    if not client:
+        return None
+    return client.complete(
+        prompt=prompt,
+        system=system,
+        max_tokens=max_tokens,
+    )
+
+
 class LLMRouter:
     """Routes LLM calls across providers with tiered fallback.
 
-    Primary: NVIDIA DeepSeek V4 Flash (fast, powerful, tool-capable)
-    Fallback: OpenRouter -> Groq -> Ollama
+    Primary: Hermes Agent (Nous Research, 219k★) — self-improving agent runtime
+    Fallback: NVIDIA DeepSeek V4 Flash -> OpenRouter -> Groq -> Ollama
     """
 
     NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
@@ -59,15 +92,23 @@ class LLMRouter:
                  system: str = "You are a helpful AI assistant.",
                  max_tokens: int = 4096, temperature: float = 0.7,
                  tier: ModelTier = "balanced") -> Optional[str]:
-        """Route to NVIDIA DeepSeek V4 Flash first, fallback to free providers."""
+        """Route to Hermes Agent first (every agent runs on Hermes),
+        then fallback through NVIDIA -> OpenRouter -> Groq -> Ollama.
+        """
+
+        # 0. Hermes Agent — primary runtime for all agents
+        result = _try_hermes(prompt, system, max_tokens, temperature)
+        if result:
+            return result
+
         self._rate_limit_nvidia()
 
-        # 1. Try NVIDIA DeepSeek V4 Flash (primary)
+        # 1. NVIDIA DeepSeek V4 Flash
         result = self._try_nvidia(prompt, system, max_tokens, temperature)
         if result:
             return result
 
-        # 2. Try OpenRouter (fallback)
+        # 2. OpenRouter
         if tier == "powerful":
             models = MODEL_TIERS["powerful"]
         elif tier == "cheap":

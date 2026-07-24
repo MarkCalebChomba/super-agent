@@ -1,17 +1,24 @@
 #!/usr/bin/env python3
 """Internet Smart Agent — autonomous multi-agent system for online income generation.
 
+Each agent starts from a seed instruction and grows itself over time.
+Agents are instruction sets (JSON), not Python classes.
+Agents prefer existing open-source tools and modify them rather than building from scratch.
+
 Usage:
-    python main.py                    # Run all agents with orchestrator
-    python main.py --agent Content    # Run a single agent
-    python main.py --list             # List available agents
-    python main.py --init-db          # Initialize databases only
+    python main.py                          # Run all agents
+    python main.py --agent ContentCreator   # Run a single agent
+    python main.py --list                   # List available agents
+    python main.py --needs                  # Show pending resource requests
 """
 
 import os
 import sys
-import threading
-import argparse
+import json
+import time
+import signal
+from pathlib import Path
+from datetime import datetime
 from loguru import logger
 
 try:
@@ -20,129 +27,233 @@ try:
 except ImportError:
     pass
 
-from config.settings import load_config, get_identity
-from db.init_db import init_database
+from evolving_agent import EvolvingAgent
 
 
-def start_health_server(port: int = 8080):
-    """Start web dashboard server in a daemon thread."""
-    try:
-        from dashboard_app import run_dashboard
-        import threading
-        thread = threading.Thread(target=run_dashboard, args=(port,),
-                                  daemon=True, name="dashboard")
-        thread.start()
-        logger.info(f"Dashboard running on port {port}")
-        return thread
-    except Exception as e:
-        logger.warning(f"Dashboard not started: {e}")
-
-
-def get_agent_class(name: str):
-    mapping = {
-        "ContentCreator": ("agents.agent_01_content", "ContentAgent"),
-        "SocialMediaMonetizer": ("agents.agent_02_social", "SocialMediaAgent"),
-        "VideoCreator": ("agents.agent_03_video", "VideoAgent"),
-        "EcommerceMerchant": ("agents.agent_04_ecommerce", "EcommerceAgent"),
-        "AffiliateMarketer": ("agents.agent_05_affiliate", "AffiliateAgent"),
-        "CryptoTrader": ("agents.agent_06_trading", "TradingAgent"),
-        "FreelanceOptimizer": ("agents.agent_07_freelance", "FreelanceAgent"),
-        "SaaSBuilder": ("agents.agent_08_saas", "SaaSAgent"),
-        "DeFiOptimizer": ("agents.agent_09_crypto_defi", "DeFiAgent"),
-        "DataArbitrageur": ("agents.agent_10_data_arbitrage", "DataArbitrageAgent"),
-        "ServiceProvider": ("agents.agent_11_services", "ServicesAgent"),
-        "PlatformMonetizer": ("agents.agent_12_platform", "PlatformAgent"),
-    }
-    return mapping.get(name)
+AGENTS_DIR = Path("instructions")
+DATA_DIR = Path("data")
+AGENT_NEEDS = DATA_DIR / "agent_needs.json"
 
 
 def list_agents():
-    from config.settings import load_config
-    config = load_config()
-    print("Available agents:")
-    for name in config.get("agent_names", []):
-        print(f"  - {name}")
-
-
-def run_agent(agent_name: str):
-    entry = get_agent_class(agent_name)
-    if not entry:
-        logger.error(f"Unknown agent: {agent_name}")
+    """List all available agent instruction sets."""
+    if not AGENTS_DIR.exists():
+        print("No agents directory found. Create instruction files in instructions/")
         return
 
-    module_path, class_name = entry
-    import importlib
-    module = importlib.import_module(module_path)
-    cls = getattr(module, class_name)
-    identity = get_identity(agent_name)
-    agent = cls(identity=identity)
+    agents = sorted(AGENTS_DIR.glob("*.json"))
+    if not agents:
+        print("No agent instruction files found.")
+        return
 
-    logger.info(f"Running single agent: {agent_name}")
-    agent.run_loop(max_cycles=20)
-
-
-def run_all(deploy: bool = False):
-    from master.orchestrator import Orchestrator
-    config = load_config()
-
-    logger.info("Initializing databases...")
-    init_database(config.get("data_dir", "data"))
-
-    # Start health server for deployment
-    if deploy:
-        start_health_server(port=int(os.getenv("PORT", "8080")))
-
-    orch = Orchestrator()
-
-    for name in config.get("agents_enabled", []):
-        entry = get_agent_class(name)
-        if not entry:
-            logger.warning(f"Unknown agent in config: {name}")
-            continue
-
-        module_path, class_name = entry
-        import importlib
+    print(f"\n{'='*60}")
+    print("  AVAILABLE AGENTS")
+    print(f"{'='*60}")
+    for agent_file in agents:
+        name = agent_file.stem
         try:
-            module = importlib.import_module(module_path)
-            cls = getattr(module, class_name)
-            identity = get_identity(name)
-            agent = cls(identity=identity)
-            orch.register_agent(name, agent)
+            with open(agent_file) as f:
+                data = json.load(f)
+            seed = data.get("seed_instruction", "No seed instruction")
+            instructions = len(data.get("instructions", []))
+            evolutions = len(data.get("evolutions", []))
+            sub_agents = list(data.get("sub_agents", {}).keys())
+            perf = data.get("performance", {})
+
+            print(f"\n  {name}")
+            print(f"     Seed: {seed[:80]}...")
+            print(f"     Learned instructions: {instructions} | Evolutions: {evolutions}")
+            if sub_agents:
+                print(f"     Sub-agents: {', '.join(sub_agents)}")
+            print(f"     Cycles: {perf.get('cycles_run', 0)} | Successes: {perf.get('successful_outputs', 0)} | Failures: {perf.get('failed_outputs', 0)}")
+        except json.JSONDecodeError:
+            print(f"\n  {name} (invalid JSON)")
+    print()
+
+
+def show_needs():
+    """Show pending resource requests from agents."""
+    if not AGENT_NEEDS.exists():
+        print("No agent needs file found.")
+        return
+
+    with open(AGENT_NEEDS) as f:
+        needs = json.load(f)
+
+    pending = [n for n in needs if n.get("status") == "pending"]
+    if not pending:
+        print("No pending resource requests.")
+        return
+
+    print(f"\n{'='*60}")
+    print(f"  PENDING RESOURCE REQUESTS ({len(pending)})")
+    print(f"{'='*60}")
+    for need in pending:
+        print(f"\n  [{need.get('priority', 'normal').upper()}] {need['agent']} needs: {need['resource']}")
+        print(f"     Requested: {need.get('requested_at', 'unknown')}")
+        print(f"     Message: {need.get('message', '')}")
+        guide = need.get("provision_guide", {})
+        if guide.get("steps"):
+            print(f"     Provision steps:")
+            for i, step in enumerate(guide["steps"], 1):
+                print(f"       {i}. {step}")
+        if guide.get("env_template"):
+            print(f"     Env template:")
+            for k, v in guide["env_template"].items():
+                print(f"       {k}={v}")
+    print()
+
+
+def mark_provisioned(resource_id: str = None):
+    """Mark a resource request as provisioned (manual intervention complete)."""
+    if not AGENT_NEEDS.exists():
+        print("No agent needs file.")
+        return
+
+    with open(AGENT_NEEDS) as f:
+        needs = json.load(f)
+
+    if resource_id:
+        for need in needs:
+            if need.get("resource") == resource_id and need["status"] == "pending":
+                need["status"] = "provisioned"
+                need["provisioned_at"] = datetime.now().isoformat()
+                print(f"Marked {need['agent']}'s {resource_id} as provisioned")
+    else:
+        mark_all = input("Mark ALL pending requests as provisioned? (y/N): ").lower()
+        if mark_all == "y":
+            for need in needs:
+                if need["status"] == "pending":
+                    need["status"] = "provisioned"
+                    need["provisioned_at"] = datetime.now().isoformat()
+            print("All pending requests marked as provisioned")
+
+    with open(AGENT_NEEDS, "w") as f:
+        json.dump(needs, f, indent=2)
+
+
+def init_default_agents():
+    """Initialize default agent instruction files if they don't exist."""
+    default_seeds = {
+        "ContentCreator": "Make money by creating and publishing content across platforms",
+        "SocialMediaMonetizer": "Make money by building and monetizing social media audiences",
+        "VideoCreator": "Make money by creating and monetizing video content",
+        "EcommerceMerchant": "Make money by selling products through e-commerce",
+        "AffiliateMarketer": "Make money through affiliate marketing commissions",
+        "CryptoTrader": "Make money through cryptocurrency trading and DeFi",
+        "FreelanceOptimizer": "Make money by selling services on freelance platforms",
+        "SaaSBuilder": "Make money by building and selling software products",
+        "DeFiOptimizer": "Make money through decentralized finance yield optimization",
+        "DataArbitrageur": "Make money through data arbitrage and market inefficiencies",
+        "ServiceProvider": "Make money by providing digital services and consulting",
+        "PlatformMonetizer": "Make money by building and monetizing digital platforms",
+        "Hermes": "Make money by orchestrating and coordinating other agents",
+    }
+
+    created = []
+    for name, seed in default_seeds.items():
+        agent_path = AGENTS_DIR / f"{name}.json"
+        if not agent_path.exists():
+            agent = EvolvingAgent(name, seed)
+            created.append(name)
+            logger.info(f"Initialized agent: {name}")
+
+    if created:
+        print(f"Initialized {len(created)} new agents: {', '.join(created)}")
+
+
+def run_single(agent_name: str, max_cycles: int = None):
+    """Run a single agent."""
+    agent_path = AGENTS_DIR / f"{agent_name}.json"
+    if not agent_path.exists():
+        print(f"Agent '{agent_name}' not found. Available agents:")
+        list_agents()
+        return
+
+    print(f"\nStarting agent: {agent_name}")
+    agent = EvolvingAgent(agent_name)
+    agent.run_loop(max_cycles=max_cycles)
+
+
+def run_all():
+    """Run all agents sequentially with idle-time handling."""
+    agents = sorted(AGENTS_DIR.glob("*.json"))
+    if not agents:
+        print("No agents found. Run --init first or create instruction files.")
+        return
+
+    print(f"\nStarting {len(agents)} agents...")
+    instances = []
+
+    for agent_file in agents:
+        name = agent_file.stem
+        try:
+            agent = EvolvingAgent(name)
+            instances.append(agent)
+            logger.info(f"Loaded agent: {name}")
         except Exception as e:
             logger.error(f"Failed to load agent {name}: {e}")
 
-    logger.info(f"Starting orchestrator with {len(orch.agents)} agents")
-    orch.run()
+    logger.info(f"Running {len(instances)} agents sequentially")
+    running = True
+
+    def signal_handler(sig, frame):
+        nonlocal running
+        logger.info("Shutdown signal received, stopping agents...")
+        running = False
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+    try:
+        while running:
+            for agent in instances:
+                if not running:
+                    break
+                try:
+                    result = agent.run_cycle()
+                    if result.get("idle"):
+                        logger.info(f"{agent.name}: waiting for resources")
+                    elif result.get("success"):
+                        logger.info(f"{agent.name}: completed successfully")
+                    else:
+                        logger.info(f"{agent.name}: no output this cycle")
+                except Exception as e:
+                    logger.error(f"{agent.name} cycle error: {e}")
+                time.sleep(2)
+            time.sleep(5)
+    except KeyboardInterrupt:
+        logger.info("Interrupted, shutting down...")
+    finally:
+        for agent in instances:
+            agent.stop()
+        logger.info("All agents stopped")
 
 
 def main():
+    import argparse
     parser = argparse.ArgumentParser(description="Internet Smart Agent System")
     parser.add_argument("--agent", type=str, help="Run a specific agent by name")
     parser.add_argument("--list", action="store_true", help="List all agents")
-    parser.add_argument("--init-db", action="store_true", help="Initialize databases only")
-    parser.add_argument("--deploy", action="store_true", help="Deployment mode (starts health server)")
-    parser.add_argument("--status", action="store_true", help="Show system dashboard")
-    parser.add_argument("--dashboard", action="store_true", help="Start web dashboard server")
+    parser.add_argument("--needs", action="store_true", help="Show pending resource requests")
+    parser.add_argument("--provision", type=str, nargs="?", const=True, help="Mark resource(s) as provisioned")
+    parser.add_argument("--init", action="store_true", help="Initialize default agent instruction files")
+    parser.add_argument("--cycles", type=int, default=None, help="Max cycles for single agent run")
     args = parser.parse_args()
 
     if args.list:
         list_agents()
-    elif args.init_db:
-        config = load_config()
-        init_database(config.get("data_dir", "data"))
-        logger.info("Databases initialized successfully")
-    elif args.status:
-        from master.dashboard import print_dashboard
-        print_dashboard()
-    elif args.dashboard:
-        port = int(os.getenv("PORT", "8080"))
-        logger.info(f"Starting web dashboard on port {port}...")
-        from dashboard_app import run_dashboard
-        run_dashboard(port=port)
+    elif args.needs:
+        show_needs()
+    elif args.provision:
+        resource_id = args.provision if isinstance(args.provision, str) else None
+        mark_provisioned(resource_id)
+    elif args.init:
+        init_default_agents()
     elif args.agent:
-        run_agent(args.agent)
+        run_single(args.agent, max_cycles=args.cycles)
     else:
-        run_all(deploy=args.deploy or os.getenv("DEPLOY", "").lower() == "true")
+        run_all()
 
 
 if __name__ == "__main__":

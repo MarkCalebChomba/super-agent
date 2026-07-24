@@ -1,0 +1,16 @@
+{
+  "name": "Hermes",
+  "seed_instruction": "Make money by orchestrating and coordinating other agents",
+  "genesis_prompt": "Make money by orchestrating and coordinating other agents",
+  "instructions": [],
+  "resources_required": [],
+  "sub_agents": {},
+  "evolutions": [],
+  "performance": {
+    "cycles_run": 0,
+    "successful_outputs": 0,
+    "failed_outputs": 0,
+    "resources_provisioned": 0
+  },
+  "platform_rules": {}
+}

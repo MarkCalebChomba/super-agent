@@ -113,7 +113,38 @@ class SystemStore:
             CREATE INDEX IF NOT EXISTS idx_resource_agent ON resource_usage(agent_name);
             CREATE INDEX IF NOT EXISTS idx_inbox_agent ON agent_inbox(agent_name);
             CREATE INDEX IF NOT EXISTS idx_plans_agent ON agent_plans(agent_name);
+
+            CREATE TABLE IF NOT EXISTS superagent_chat (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                role TEXT NOT NULL,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS agent_chat_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_name TEXT NOT NULL,
+                input_prompt TEXT,
+                output_response TEXT,
+                execution_mode TEXT DEFAULT 'hermes',
+                success INTEGER DEFAULT 0,
+                error_message TEXT,
+                tokens_used INTEGER DEFAULT 0,
+                duration_ms INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_chat_agent ON agent_chat_history(agent_name);
         """)
+        try:
+            self._conn.execute("ALTER TABLE agent_registry ADD COLUMN current_task TEXT DEFAULT ''")
+            self._conn.commit()
+        except Exception:
+            pass
+        try:
+            self._conn.execute("ALTER TABLE agent_registry ADD COLUMN paused INTEGER DEFAULT 0")
+            self._conn.commit()
+        except Exception:
+            pass
         self._conn.commit()
 
     # === AGENT REGISTRY ===
@@ -144,6 +175,20 @@ class SystemStore:
         self._conn.execute(
             "UPDATE agent_registry SET status = ?, last_active = CURRENT_TIMESTAMP WHERE agent_name = ?",
             (status, name)
+        )
+        self._conn.commit()
+
+    def set_agent_paused(self, name: str, paused: bool):
+        self._conn.execute(
+            "UPDATE agent_registry SET paused = ? WHERE agent_name = ?",
+            (1 if paused else 0, name)
+        )
+        self._conn.commit()
+
+    def update_agent_task(self, name: str, task: str):
+        self._conn.execute(
+            "UPDATE agent_registry SET current_task = ? WHERE agent_name = ?",
+            (task[:200], name)
         )
         self._conn.commit()
 
@@ -385,6 +430,27 @@ class SystemStore:
         """)
         return [dict(r) for r in cur.fetchall()]
 
+    # === SUPERAGENT CHAT ===
+
+    def save_superagent_message(self, role: str, message: str):
+        self._conn.execute(
+            "INSERT INTO superagent_chat (role, message) VALUES (?, ?)",
+            (role, message)
+        )
+        self._conn.commit()
+
+    def get_superagent_chat(self, limit: int = 50) -> list[dict]:
+        cur = self._conn.execute(
+            "SELECT * FROM superagent_chat ORDER BY created_at ASC"
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def clear_superagent_chat(self):
+        self._conn.execute("DELETE FROM superagent_chat")
+        self._conn.commit()
+
+    # === AGENT PLANS ===
+
     def complete_plan(self, agent_name: str, plan_id: int):
         self._conn.execute(
             "UPDATE agent_plans SET status = 'completed' WHERE id = ? AND agent_name = ?",
@@ -394,6 +460,32 @@ class SystemStore:
         if hasattr(self._local, "conn") and self._local.conn:
             self._local.conn.close()
             self._local.conn = None
+
+    # === AGENT CHAT HISTORY ===
+
+    def log_chat_interaction(self, agent_name: str, input_prompt: str,
+                              output_response: str = None, execution_mode: str = "hermes",
+                              success: bool = False, error_message: str = None,
+                              tokens_used: int = 0, duration_ms: int = 0):
+        self._conn.execute(
+            "INSERT INTO agent_chat_history (agent_name, input_prompt, output_response, execution_mode, success, error_message, tokens_used, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (agent_name, input_prompt, output_response, execution_mode, 1 if success else 0, error_message, tokens_used, duration_ms)
+        )
+        self._conn.commit()
+
+    def get_chat_history(self, agent_name: str, limit: int = 50) -> list[dict]:
+        cur = self._conn.execute(
+            "SELECT * FROM agent_chat_history WHERE agent_name = ? ORDER BY created_at DESC LIMIT ?",
+            (agent_name, limit)
+        )
+        return [dict(r) for r in cur.fetchall()]
+
+    def get_all_chat_recent(self, limit: int = 20) -> list[dict]:
+        cur = self._conn.execute(
+            "SELECT * FROM agent_chat_history ORDER BY created_at DESC LIMIT ?",
+            (limit,)
+        )
+        return [dict(r) for r in cur.fetchall()]
 
     @classmethod
     def _reset(cls):

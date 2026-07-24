@@ -1,8 +1,6 @@
-from .browser_automation import BrowserAutomation
-from .email_tools import EmailTools
-from .social_tools import SocialTools
-from .payment_tools import PaymentTools
-from .wallet_tools import WalletTools
-from .content_gen import ContentGenerator
+from .stealth_browser import StealthBrowser
+from .captcha_solver import CaptchaSolver
+from .email_verifier import EmailVerifier
+from .proxy_manager import ProxyManager
 
-__all__ = ["BrowserAutomation", "EmailTools", "SocialTools", "PaymentTools", "WalletTools", "ContentGenerator"]
+__all__ = ["StealthBrowser", "CaptchaSolver", "EmailVerifier", "ProxyManager"]

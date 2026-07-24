@@ -1,0 +1,16 @@
+{
+  "name": "FreelanceOptimizer",
+  "seed_instruction": "Make money by selling services on freelance platforms",
+  "genesis_prompt": "Make money by selling services on freelance platforms",
+  "instructions": [],
+  "resources_required": [],
+  "sub_agents": {},
+  "evolutions": [],
+  "performance": {
+    "cycles_run": 0,
+    "successful_outputs": 0,
+    "failed_outputs": 0,
+    "resources_provisioned": 0
+  },
+  "platform_rules": {}
+}

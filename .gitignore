@@ -1,6 +1,5 @@
 __pycache__/
 *.log
-nul
 *.pyc
 *.pyo
 .env
@@ -15,3 +14,14 @@ data/
 *.egg-info/
 dist/
 build/
+
+# Agent secrets and credentials
+.secrets/
+build_output/
+
+# Browser profiles and cookies
+data/browser_profiles/
+data/cookies/
+super-agent-repo/
+*.pid
+agent_output.log

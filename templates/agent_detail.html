@@ -8,84 +8,106 @@
 * { margin:0; padding:0; box-sizing:border-box; }
 body { font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:#0d1117; color:#c9d1d9; padding:20px; }
 .container { max-width:1200px; margin:0 auto; }
-h1 { color:#58a6ff; font-size:1.5rem; }
-.back { color:#8b949e; font-size:0.9rem; margin-bottom:16px; display:block; }
+h1 { color:#58a6ff; font-size:1.5rem; display:inline; }
+h2 { color:#f0f6fc; font-size:1.1rem; margin-bottom:10px; border-bottom:1px solid #30363d; padding-bottom:6px; }
+.back { color:#8b949e; font-size:0.85rem; display:block; margin-bottom:10px; }
 .back:hover { color:#58a6ff; }
-.time { color:#8b949e; font-size:0.85rem; float:right; }
-h2 { color:#f0f6fc; font-size:1.1rem; margin-bottom:12px; border-bottom:1px solid #30363d; padding-bottom:8px; }
-.card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:16px; margin-bottom:16px; }
-.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; }
+.time { color:#8b949e; font-size:0.85rem; float:right; margin-top:4px; }
+.card { background:#161b22; border:1px solid #30363d; border-radius:8px; padding:14px; margin-bottom:12px; }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
 @media (max-width:768px) { .grid2 { grid-template-columns:1fr; } }
 table { width:100%; border-collapse:collapse; font-size:0.85rem; }
-th { text-align:left; color:#8b949e; padding:6px 8px; border-bottom:1px solid #30363d; font-weight:500; }
-td { padding:6px 8px; border-bottom:1px solid #21262d; vertical-align:top; }
+th { text-align:left; color:#8b949e; padding:5px 8px; border-bottom:1px solid #30363d; font-weight:500; }
+td { padding:5px 8px; border-bottom:1px solid #21262d; vertical-align:top; }
 .badge { display:inline-block; padding:2px 10px; border-radius:12px; font-size:0.75rem; font-weight:600; }
 .badge-green { background:#1b4126; color:#3fb950; }
 .badge-red { background:#4e1a1a; color:#f85149; }
 .badge-yellow { background:#4d3a0f; color:#d29922; }
 .log-msg { font-family:'SF Mono',monospace; font-size:0.8rem; color:#8b949e; }
-.log-debug { color:#8b949e; }
-.log-info { color:#c9d1d9; }
-.log-action { color:#3fb950; }
-.log-warn { color:#d29922; }
-.log-error { color:#f85149; }
-.log-revenue { color:#d2a8ff; }
-.log-cta { color:#f85149; font-weight:600; }
+.log-debug { color:#8b949e; } .log-info { color:#c9d1d9; } .log-action { color:#3fb950; }
+.log-warn { color:#d29922; } .log-error { color:#f85149; }
+.log-revenue { color:#d2a8ff; } .log-cta { color:#f85149; font-weight:600; }
 .stat-value { font-size:1.3rem; font-weight:600; }
 .stat-label { font-size:0.8rem; color:#8b949e; }
 textarea { width:100%; background:#0d1117; border:1px solid #30363d; border-radius:6px; color:#c9d1d9; padding:8px; font-family:'SF Mono',monospace; font-size:0.85rem; resize:vertical; min-height:60px; }
 textarea:focus { outline:none; border-color:#58a6ff; }
 .btn { background:#238636; border:0; color:#fff; padding:8px 16px; border-radius:6px; cursor:pointer; font-size:0.85rem; margin-top:8px; }
 .btn:hover { background:#2ea043; }
-pre { background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:12px; font-size:0.8rem; max-height:300px; overflow:auto; color:#c9d1d9; }
+.btn-sm { background:#21262d; border:1px solid #30363d; color:#c9d1d9; padding:4px 10px; border-radius:4px; cursor:pointer; font-size:0.75rem; margin:2px; }
+.btn-sm:hover { background:#30363d; }
+pre { background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:12px; font-size:0.8rem; max-height:500px; overflow:auto; color:#c9d1d9; }
 .mail-item { padding:8px 0; border-bottom:1px solid #21262d; }
 .mail-item:last-child { border:0; }
-.mail-sender { color:#58a6ff; font-weight:600; }
-.mail-msg { margin-top:4px; color:#c9d1d9; }
+.mail-sender { color:#58a6ff; font-weight:600; font-size:0.85rem; }
+.mail-msg { margin-top:4px; color:#c9d1d9; font-size:0.85rem; }
 .mail-time { font-size:0.75rem; color:#8b949e; }
-.plan-item { padding:6px 0; border-bottom:1px solid #21262d; }
+.plan-item { padding:5px 0; border-bottom:1px solid #21262d; font-size:0.85rem; }
 .plan-item:last-child { border:0; }
-.footer { text-align:center; color:#484f58; font-size:0.8rem; margin-top:24px; }
+.footer { text-align:center; color:#484f58; font-size:0.8rem; margin-top:20px; }
+.live-dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-left:8px; animation:pulse 1.5s infinite; vertical-align:middle; }
+.live-dot.on { background:#3fb950; box-shadow:0 0 6px #3fb950; }
+.live-dot.off { background:#484f58; animation:none; }
+@keyframes pulse { 0%{opacity:1;} 50%{opacity:0.4;} 100%{opacity:1;} }
+.task-text { font-size:0.95rem; color:#f0f6fc; margin-top:4px; min-height:1.2em; }
+.task-label { font-size:0.7rem; color:#8b949e; text-transform:uppercase; letter-spacing:0.5px; }
+.build-item { padding:6px 0; border-bottom:1px solid #21262d; }
+.build-item:last-child { border:0; }
+.build-fname { color:#58a6ff; font-size:0.82rem; }
+.build-time { font-size:0.72rem; color:#8b949e; }
+.build-preview { background:#0d1117; border:1px solid #21262d; border-radius:4px; padding:8px; margin-top:4px; font-family:'SF Mono',monospace; font-size:0.72rem; color:#8b949e; max-height:60px; overflow:hidden; display:none; }
+.build-preview.show { display:block; }
+.build-preview.expanded { max-height:none; }
+.toggle-build { cursor:pointer; font-size:0.72rem; color:#8b949e; }
+.toggle-build:hover { color:#58a6ff; }
+.logs-table { max-height:500px; overflow-y:auto; }
+.logs-table::-webkit-scrollbar { width:6px; }
+.logs-table::-webkit-scrollbar-track { background:#0d1117; }
+.logs-table::-webkit-scrollbar-thumb { background:#30363d; border-radius:3px; }
 </style>
 </head>
 <body>
 <div class="container">
   <a href="/" class="back">&larr; Back to Dashboard</a>
   <h1>{{ agent.agent_name }}</h1>
-  <span class="time">{{ now }}</span>
+  <span class="time" id="headerTime">{{ now }}</span>
 
+  <!-- Status + Task Row -->
   <div class="grid2">
     <div class="card">
-      <h2>Status</h2>
+      <h2>Status <span class="live-dot {% if agent.current_task %}on{% else %}off{% endif %}" id="liveDot"></span></h2>
       {% set cls = {'running':'badge-green','idle':'badge-yellow','stopped':'badge-red'}.get(agent.status, 'badge-yellow') %}
       <p><span class="badge {{ cls }}">{{ agent.status }}</span></p>
-      <p style="margin-top:8px;color:#8b949e;font-size:0.85rem;">
-        Income: {{ agent.income_methods[:80] }}...<br>
+      <div class="task-label">Currently Working On</div>
+      <div class="task-text" id="currentTask">{{ agent.current_task or 'Waiting for next cycle...' }}</div>
+      <p style="margin-top:10px;color:#8b949e;font-size:0.82rem;">
+        Income: {{ agent.income_methods[:120] }}...<br>
         Builds: <strong>{{ build_count }}</strong> &middot; Errors: <strong>{{ agent.error_count }}</strong><br>
         Revenue: <strong style="color:#d2a8ff;">${{ "%.2f"|format(agent.total_revenue) }}</strong><br>
         Class: {{ agent.class_path.split('.')[-1] }}<br>
-        Created: {{ agent.created_at[:19] if agent.created_at else '?' }}<br>
+        Created: {{ agent.created_at[:19] if agent.created_at else '?' }} |
         Last Active: {{ agent.last_active[:19] if agent.last_active else '?' }}
       </p>
     </div>
     <div class="card">
       <h2>Resources (24h)</h2>
-      <div class="grid2" style="gap:8px;">
+      <div class="grid2" style="gap:6px;">
         <div class="stat"><div class="stat-value">{{ resource_usage.get('avg_mem', 0)|int }} MB</div><div class="stat-label">Avg Memory</div></div>
-        <div class="stat"><div class="stat-value">{{ resource_usage.get('tok', 0) }}</div><div class="stat-label">Tokens</div></div>
+        <div class="stat"><div class="stat-value">{{ resource_usage.get('tok', 0) }}</div><div class="stat-label">Tokens Consumed</div></div>
+        <div class="stat"><div class="stat-value">{{ resource_usage.get('api', 0) }}</div><div class="stat-label">API Calls</div></div>
+        <div class="stat"><div class="stat-value">{{ build_count }}</div><div class="stat-label">Total Builds</div></div>
       </div>
     </div>
   </div>
 
-  <!-- Inbox -->
+  <!-- Inbox & Send Advice -->
   <div class="card">
     <h2>Send Advice to {{ agent.agent_name }}</h2>
     <form action="/agent/{{ agent.agent_name }}/send_advice" method="POST">
-      <textarea name="message" placeholder="Type your advice or instruction for this agent..."></textarea>
+      <textarea name="message" placeholder="Tell this agent what to do — it will check this inbox every 5 cycles..."></textarea>
       <button type="submit" class="btn">Send to {{ agent.agent_name }}</button>
     </form>
     {% if inbox %}
-    <h2 style="margin-top:16px;">Message History ({{ mail_count }} unread)</h2>
+    <h2 style="margin-top:14px;">Message History ({{ mail_count }} unread)</h2>
     {% for m in inbox %}
     <div class="mail-item">
       <div class="mail-sender">{{ m.sender }} {% if not m.read %}<span class="badge badge-red">NEW</span>{% endif %}</div>
@@ -102,9 +124,9 @@ pre { background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:1
     {% if plans %}
     {% for p in plans %}
     <div class="plan-item">
-      <span style="color:{{ '#'~p.id|string }}">{{ p.plan_type }}</span>:
-      <span style="color:#c9d1d9;">{{ p.content[:120] }}</span>
-      <span style="color:#8b949e;font-size:0.8rem;">&middot; {{ p.created_at[:19] if p.created_at else '' }}</span>
+      <span style="color:#58a6ff;">{{ p.plan_type }}</span>:
+      <span style="color:#c9d1d9;">{{ p.content[:200] }}</span>
+      <span style="color:#8b949e;font-size:0.78rem;"> &middot; {{ p.created_at[:19] if p.created_at else '' }}</span>
     </div>
     {% endfor %}
     {% else %}
@@ -112,32 +134,82 @@ pre { background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:1
     {% endif %}
   </div>
 
-  <!-- Latest Build -->
+  <!-- Latest Build - Full Content -->
   {% if latest_build %}
   <div class="card">
-    <h2>Latest Build: {{ latest_build }}</h2>
+    <h2>Latest Build: <a href="/build/{{ agent.agent_name }}/{{ latest_build }}" style="font-size:0.9rem;">{{ latest_build }}</a></h2>
     <pre>{{ build_preview }}</pre>
+    {% if build_preview|length > 5000 %}
+    <p style="margin-top:6px;color:#8b949e;font-size:0.8rem;">
+      <a href="/build/{{ agent.agent_name }}/{{ latest_build }}">View full file &rarr;</a>
+    </p>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <!-- Recent Builds (last 10) -->
+  {% if recent_builds %}
+  <div class="card">
+    <h2>Recent Builds</h2>
+    {% for b in recent_builds %}
+    <div class="build-item">
+      <a href="/build/{{ agent.agent_name }}/{{ b.filename }}" class="build-fname">{{ b.filename }}</a>
+      <span class="build-time">{{ b.timestamp }} &middot; {{ b.size }} bytes</span>
+      <span class="toggle-build" onclick="toggleBuild(this)"> [show preview]</span>
+      <div class="build-preview">{{ b.preview[:300] }}</div>
+    </div>
+    {% endfor %}
   </div>
   {% endif %}
 
   <!-- Logs -->
   <div class="card">
     <h2>Recent Logs (last 100)</h2>
+    <div class="logs-table">
     <table>
       <tr><th>Time</th><th>Level</th><th>Message</th></tr>
       {% set lv_map = {10:'DEBUG',20:'INFO',25:'ACTION',30:'WARN',40:'ERROR',45:'REVENUE',50:'CTA'} %}
       {% set lc_map = {10:'log-debug',20:'log-info',25:'log-action',30:'log-warn',40:'log-error',45:'log-revenue',50:'log-cta'} %}
       {% for l in logs %}
       <tr class="{{ lc_map.get(l.level, 'log-info') }}">
-        <td style="white-space:nowrap;">{{ l.timestamp[:19] if l.timestamp else '' }}</td>
-        <td>{{ lv_map.get(l.level, l.level) }}</td>
-        <td class="log-msg">{{ l.message[:150] }}</td>
+        <td style="white-space:nowrap;font-size:0.78rem;">{{ l.timestamp[11:19] if l.timestamp else '' }}</td>
+        <td style="font-size:0.78rem;">{{ lv_map.get(l.level, l.level) }}</td>
+        <td class="log-msg">{{ l.message[:200] }}</td>
       </tr>
       {% endfor %}
     </table>
+    </div>
   </div>
 
-  <p class="footer"><a href="/">Back to Dashboard</a></p>
+  <p class="footer"><a href="/">Back to Dashboard</a> &middot; Auto-refresh: <span id="countdown">15</span>s</p>
 </div>
+<script>
+var sec = 15;
+setInterval(function(){
+  sec--;
+  document.getElementById('countdown').textContent = sec;
+  if(sec <= 0) {
+    fetch('/api/live').then(r=>r.json()).then(data=>{
+      data.agents.forEach(function(a){
+        if(a.agent_name === '{{ agent.agent_name }}'){
+          var el = document.getElementById('currentTask');
+          if(el) el.textContent = a.current_task || 'Waiting...';
+          var dot = document.getElementById('liveDot');
+          if(dot) dot.className = a.current_task ? 'live-dot on' : 'live-dot off';
+        }
+      });
+    }).catch(function(){ location.reload(); });
+    sec = 15;
+  }
+}, 1000);
+function toggleBuild(el){
+  var preview = el.parentNode.querySelector('.build-preview');
+  if(preview){
+    var show = preview.style.display !== 'block';
+    preview.style.display = show ? 'block' : 'none';
+    el.textContent = show ? ' [hide preview]' : ' [show preview]';
+  }
+}
+</script>
 </body>
 </html>

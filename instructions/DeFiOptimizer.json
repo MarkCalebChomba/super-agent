@@ -1,0 +1,16 @@
+{
+  "name": "DeFiOptimizer",
+  "seed_instruction": "Make money through decentralized finance yield optimization",
+  "genesis_prompt": "Make money through decentralized finance yield optimization",
+  "instructions": [],
+  "resources_required": [],
+  "sub_agents": {},
+  "evolutions": [],
+  "performance": {
+    "cycles_run": 0,
+    "successful_outputs": 0,
+    "failed_outputs": 0,
+    "resources_provisioned": 0
+  },
+  "platform_rules": {}
+}

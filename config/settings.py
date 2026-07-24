@@ -23,7 +23,7 @@ def load_config() -> dict:
         "ContentCreator", "SocialMediaMonetizer", "VideoCreator",
         "EcommerceMerchant", "AffiliateMarketer", "CryptoTrader",
         "FreelanceOptimizer", "SaaSBuilder", "DeFiOptimizer",
-        "DataArbitrageur", "ServiceProvider", "PlatformMonetizer",
+        "DataArbitrageur", "ServiceProvider", "PlatformMonetizer", "Hermes",
     ])
     config.setdefault("max_cycles_per_agent", 0)  # 0 = unlimited
     config.setdefault("data_dir", "data")
