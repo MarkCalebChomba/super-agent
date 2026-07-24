@@ -461,6 +461,8 @@ class EvolvingAgent:
             pass
 
         available_modes = set(r.get("execution_mode", "hermes") for r in provisioned.values())
+        if not available_modes:
+            available_modes = {"hermes"}
 
         result = None
         for mode in available_modes:
@@ -555,7 +557,7 @@ class EvolvingAgent:
         except Exception as e:
             duration = int((time.time() - start) * 1000)
             self._log_chat(prompt, None, "hermes", False, str(e), duration)
-            logger.error(f"Hermes execution error: {e}")
+            logger.error(f"{self.name}: execution failed: {result.get('error', 'unknown') if result else 'no execution mode'}")
             return {"success": False, "error": str(e)}
 
     def _execute_via_browser(self, prompt: str, resources: dict) -> dict:
