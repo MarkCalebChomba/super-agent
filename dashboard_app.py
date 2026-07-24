@@ -15,6 +15,31 @@ def get_store():
     from master.system_store import SystemStore
     return SystemStore()
 
+def seed_agents():
+    """Auto-register agents from instructions/ directory on first run."""
+    store = get_store()
+    existing = store.get_all_agents()
+    if existing:
+        return
+    inst_dir = Path("instructions")
+    if not inst_dir.exists():
+        return
+    count = 0
+    for f in sorted(inst_dir.glob("*.json")):
+        name = f.stem
+        if name == "Hermes":
+            continue
+        try:
+            inst = json.loads(f.read_text())
+            class_path = f"evolving_agent.EvolvingAgent"
+            income = inst.get("income_methods", inst.get("genesis_context", {}).get("primary_income", ""))
+            store.register_agent(name, class_path, income_methods=income)
+            count += 1
+        except Exception:
+            pass
+    if count:
+        print(f"Seeded {count} agents from instructions/")
+
 def get_sys_db():
     p = DATA_DIR / "system.db"
     if not p.exists(): return None
@@ -179,6 +204,9 @@ def api_agent_memory(name):
 def api_agents():
     store = get_store()
     agents = store.get_all_agents()
+    if not agents:
+        seed_agents()
+        agents = store.get_all_agents()
     live = get_live_data()
     for a in agents:
         a["build_count"] = get_build_count(a["agent_name"])
