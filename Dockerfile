@@ -18,5 +18,5 @@ EXPOSE 8080
 
 ENV DEPLOY=true
 
-# Railway deploy: serve the Flask dashboard (agents run on user's machine)
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--threads", "4", "dashboard_app:app", "--timeout", "120"]
+# Railway: run agents + dashboard in one container
+CMD ["python", "run.py"]
