@@ -7,6 +7,15 @@ from live_tracker import get_all as get_live_data, update as update_live
 from loguru import logger
 
 app = Flask(__name__)
+
+@app.errorhandler(404)
+def api_404(e):
+    return jsonify({"error": "not found"}), 404
+
+@app.errorhandler(405)
+def api_405(e):
+    return jsonify({"error": "method not allowed"}), 405
+
 DATA_DIR = Path("data")
 BUILD_DIR = Path("build_output")
 _agent_threads = {}

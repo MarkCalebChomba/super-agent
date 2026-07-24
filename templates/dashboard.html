@@ -355,18 +355,23 @@ function sendAdvice(){
     });
 }
 
+async function postJSON(url){
+  const r = await fetch(url, {method:'POST'});
+  return r.json();
+}
+
 async function startAgent(name){
-  const d = await fetchJSON('/api/agent/'+name+'/start');
+  const d = await postJSON('/api/agent/'+name+'/start');
   if(d.success) refreshAgent();
 }
 
 async function stopAgent(name){
-  const d = await fetchJSON('/api/agent/'+name+'/stop');
+  const d = await postJSON('/api/agent/'+name+'/stop');
   if(d.success) refreshAgent();
 }
 
 async function restartAgent(name){
-  const d = await fetchJSON('/api/agent/'+name+'/restart');
+  const d = await postJSON('/api/agent/'+name+'/restart');
   if(d.success) refreshAgent();
 }
 
