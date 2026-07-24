@@ -1,4 +1,5 @@
 FROM python:3.11-slim
+ARG BUILD_DATE=unknown
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget unzip procps \
@@ -9,7 +10,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
 COPY . .
-RUN mkdir -p data build_output && chmod +x start.sh entrypoint.sh
+RUN mkdir -p data build_output && chmod +x entrypoint.sh
 
 ENV DEPLOY=true
 EXPOSE 8080
