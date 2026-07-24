@@ -2,7 +2,7 @@
 import os, json, time, threading, sqlite3
 from pathlib import Path
 from datetime import datetime
-from flask import Flask, render_template, request, jsonify, Response, abort, stream_with_context
+from flask import Flask, render_template, request, jsonify, Response, abort
 from live_tracker import get_all as get_live_data, update as update_live
 
 app = Flask(__name__)
@@ -279,14 +279,17 @@ def stream_logs():
     def gen():
         seen = set()
         while True:
-            with _log_buffer_lock:
-                for entry in _log_buffer:
-                    eid = id(entry)
-                    if eid not in seen:
-                        seen.add(eid)
-                        yield f"data: {json.dumps(entry)}\n\n"
-            time.sleep(0.5)
-    return Response(stream_with_context(gen()), mimetype="text/event-stream")
+            try:
+                with _log_buffer_lock:
+                    for entry in _log_buffer:
+                        eid = id(entry)
+                        if eid not in seen:
+                            seen.add(eid)
+                            yield f"data: {json.dumps(entry)}\n\n"
+                time.sleep(0.5)
+            except GeneratorExit:
+                break
+    return Response(gen(), mimetype="text/event-stream")
 
 # ── Main ──────────────────────────────────────────────────────────
 

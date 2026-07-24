@@ -183,7 +183,6 @@ async function refreshAgent(){
   $('btn-restart').style.display = 'inline-block';
   const panel = $('detail-panel');
   panel.innerHTML = renderAgentDetail(agent, inst, chat, builds, logs);
-  if(agent.status === 'running') loadAgentList();
 }
 
 function renderAgentDetail(agent, inst, chat, builds, logs){
@@ -371,34 +370,32 @@ async function restartAgent(name){
   if(d.success) refreshAgent();
 }
 
-// ── Live Feed via SSE ────────────────────────────────────────────
-function connectSSE(){
-  const es = new EventSource('/api/stream/logs');
-  es.onmessage = function(e){
-    try {
-      const entry = JSON.parse(e.data);
-      if(entry.level === 'DEBUG') return; // skip debug noise
-      const feed = document.getElementById('sse-feed');
-      if(!feed) return;
-      const div = document.createElement('div');
-      div.style.display = 'flex'; div.style.gap = '8px';
-      div.style.fontFamily = 'monospace'; div.style.fontSize = '11px';
-      div.innerHTML = '<span style="color:#484f58;min-width:70px">'+(entry.ts||'').slice(11,19)+'</span>'+
-        '<span style="font-weight:600;min-width:55px;color:'+(entry.level==='ERROR'?'#f85149':entry.level==='WARNING'?'#d29922':'#58a6ff')+'">'+entry.level+'</span>'+
-        '<span style="color:#79c0ff;min-width:100px">'+escapeHTML(entry.agent||'')+'</span>'+
-        '<span style="color:#c9d1d9">'+escapeHTML(entry.msg||'')+'</span>';
-      feed.appendChild(div);
-      feed.scrollTop = feed.scrollHeight;
-      if(feed.children.length > 200) feed.removeChild(feed.firstChild);
-    } catch(_){}
-  };
-  es.onerror = function(){setTimeout(connectSSE,3000)};
+
+
+// ── Poll live logs ───────────────────────────────────────────────
+async function pollLogs(){
+  try {
+    const logs = await fetchJSON('/api/logs?limit=50');
+    const feed = document.getElementById('sse-feed');
+    if(!feed) return;
+    $('log-count').textContent = logs.length;
+    feed.innerHTML = logs.slice().reverse().map(l => {
+      const t = (l.ts||l.timestamp||'').slice(11,19);
+      const lvl = l.level||'INFO';
+      const lc = lvl==='ERROR'?'#f85149':lvl==='WARNING'?'#d29922':'#58a6ff';
+      return '<div style="display:flex;gap:8px;font-family:monospace;font-size:11px">'+
+        '<span style="color:#484f58;min-width:70px">'+t+'</span>'+
+        '<span style="font-weight:600;min-width:55px;color:'+lc+'">'+lvl+'</span>'+
+        '<span style="color:#79c0ff;min-width:100px">'+escapeHTML(l.agent||'')+'</span>'+
+        '<span style="color:#c9d1d9">'+escapeHTML(l.msg||l.message||'')+'</span></div>';
+    }).join('');
+    feed.scrollTop = feed.scrollHeight;
+  } catch(_){}
 }
-connectSSE();
+setInterval(pollLogs, 2000);
 
 // ── Periodic refresh ─────────────────────────────────────────────
 setInterval(loadAgentList, 5000);
-setInterval(refreshAgent, 5000);
 loadAgentList();
 </script>
 
