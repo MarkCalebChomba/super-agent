@@ -4,6 +4,7 @@ from pathlib import Path
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, Response, abort
 from live_tracker import get_all as get_live_data, update as update_live
+from loguru import logger
 
 app = Flask(__name__)
 DATA_DIR = Path("data")
@@ -300,6 +301,26 @@ def api_revenue():
 @app.route("/api/health")
 def api_health():
     return "OK"
+
+@app.route("/api/debug/seed")
+def api_debug_seed():
+    """Force re-seed and return debug info."""
+    store = get_store()
+    before = store.get_all_agents()
+    seed_agents()
+    after = store.get_all_agents()
+    inst_dir = Path("instructions")
+    files = list(inst_dir.glob("*.json")) if inst_dir.exists() else []
+    return jsonify({
+        "before_seed": before,
+        "after_seed": after,
+        "instructions_dir_exists": inst_dir.exists(),
+        "instructions_dir_path": str(inst_dir.resolve()),
+        "json_files": [f.name for f in files],
+        "system_db_exists": Path("data/system.db").exists(),
+        "system_db_path": str(Path("data/system.db").resolve()),
+        "cwd": str(Path.cwd()),
+    })
 
 # ── SSE Stream ────────────────────────────────────────────────────
 
