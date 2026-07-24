@@ -14,4 +14,4 @@ RUN mkdir -p data build_output && chmod +x start.sh
 ENV DEPLOY=true
 EXPOSE 8080
 
-CMD ["python", "railway_run.py"]
+CMD ["bash", "entrypoint.sh"]
