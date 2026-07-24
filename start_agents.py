@@ -11,22 +11,22 @@ try:
     from master.orchestrator import Orchestrator
     orch = Orchestrator()
     # Load agents
+    mapping = {
+        "ContentCreator": ("agents.agent_01_content", "ContentAgent"),
+        "SocialMediaMonetizer": ("agents.agent_02_social", "SocialMediaAgent"),
+        "VideoCreator": ("agents.agent_03_video", "VideoAgent"),
+        "EcommerceMerchant": ("agents.agent_04_ecommerce", "EcommerceAgent"),
+        "AffiliateMarketer": ("agents.agent_05_affiliate", "AffiliateAgent"),
+        "CryptoTrader": ("agents.agent_06_trading", "TradingAgent"),
+        "FreelanceOptimizer": ("agents.agent_07_freelance", "FreelanceAgent"),
+        "SaaSBuilder": ("agents.agent_08_saas", "SaaSAgent"),
+        "DeFiOptimizer": ("agents.agent_09_crypto_defi", "DeFiAgent"),
+        "DataArbitrageur": ("agents.agent_10_data_arbitrage", "DataArbitrageAgent"),
+        "ServiceProvider": ("agents.agent_11_services", "ServicesAgent"),
+        "PlatformMonetizer": ("agents.agent_12_platform", "PlatformAgent"),
+    }
     for name in config.get("agents_enabled", []):
-        entry = None
-        mapping = {
-            "ContentCreator": ("agents.agent_01_content", "ContentAgent"),
-            "SocialMediaMonetizer": ("agents.agent_02_social", "SocialMediaAgent"),
-            "VideoCreator": ("agents.agent_03_video", "VideoAgent"),
-            "EcommerceMerchant": ("agents.agent_04_ecommerce", "EcommerceAgent"),
-            "AffiliateMarketer": ("agents.agent_05_affiliate", "AffiliateAgent"),
-            "CryptoTrader": ("agents.agent_06_trading", "TradingAgent"),
-            "FreelanceOptimizer": ("agents.agent_07_freelance", "FreelanceAgent"),
-            "SaaSBuilder": ("agents.agent_08_saas", "SaaSAgent"),
-            "DeFiOptimizer": ("agents.agent_09_crypto_defi", "DeFiAgent"),
-            "DataArbitrageur": ("agents.agent_10_data_arbitrage", "DataArbitrageAgent"),
-            "ServiceProvider": ("agents.agent_11_services", "ServicesAgent"),
-            "PlatformMonetizer": ("agents.agent_12_platform", "PlatformAgent"),
-        }.get(name)
+        entry = mapping.get(name)
         if not entry:
             sys.stdout.write(f"[AGENT_PROC] Unknown agent: {name}\n")
             sys.stdout.flush()
