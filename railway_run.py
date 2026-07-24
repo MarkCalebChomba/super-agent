@@ -1,48 +1,53 @@
-"""Railway entrypoint: init DB, start agents, then exec gunicorn."""
-import os, sys, time
+"""Railway entrypoint: init DB, start agents, then serve dashboard."""
+import os, sys, time, subprocess
 
 os.environ["DEPLOY"] = "true"
-os.environ["RAILWAY_RUN"] = "1"
 
-print("[RAILWAY] Super Agent startup...", flush=True)
+sys.stdout.write("[RAILWAY] === Super Agent 24/7 ===\n")
+sys.stdout.write(f"[RAILWAY] Python: {sys.version}\n")
+sys.stdout.flush()
 
 try:
     from db.init_db import init_database
     from config.settings import load_config
     cfg = load_config()
     init_database(cfg.get("data_dir", "data"))
-    print("[RAILWAY] DB initialized", flush=True)
+    sys.stdout.write("[RAILWAY] DB initialized\n")
+    sys.stdout.flush()
 except Exception as e:
-    print(f"[RAILWAY] DB init: {e}", flush=True)
+    sys.stdout.write(f"[RAILWAY] DB init: {e}\n")
+    sys.stdout.flush()
 
-# Fork: child runs agents, parent exec's gunicorn
 pid = os.fork()
 if pid == 0:
-    # Child process: run agents forever
     import signal
     signal.signal(signal.SIGTERM, lambda *a: os._exit(0))
     signal.signal(signal.SIGINT, lambda *a: os._exit(0))
+    sys.stdout.write("[RAILWAY] Agent child process starting...\n")
+    sys.stdout.flush()
     try:
         from master.orchestrator import Orchestrator
         orch = Orchestrator()
-        print(f"[RAILWAY] Loaded {len(orch.agents)} agents, running...", flush=True)
+        sys.stdout.write(f"[RAILWAY] {len(orch.agents)} agents loaded\n")
+        sys.stdout.flush()
         orch.run()
     except Exception as e:
-        print(f"[RAILWAY] Agent error: {e}", flush=True)
+        sys.stdout.write(f"[RAILWAY] Agent error (will retry): {e}\n")
+        sys.stdout.flush()
         while True:
             time.sleep(60)
     os._exit(0)
 else:
-    # Parent process: start dashboard
+    sys.stdout.write(f"[RAILWAY] Agent PID: {pid}, starting gunicorn...\n")
+    sys.stdout.flush()
     time.sleep(3)
-    print("[RAILWAY] Starting gunicorn dashboard...", flush=True)
-    os.execvp("gunicorn", [
+    proc = subprocess.Popen([
         "gunicorn",
         "--bind", "0.0.0.0:8080",
-        "--workers", "2",
-        "--threads", "4",
+        "--workers", "2", "--threads", "4",
         "--timeout", "120",
         "--access-logfile", "-",
         "--error-logfile", "-",
         "dashboard_app:app",
     ])
+    proc.wait()

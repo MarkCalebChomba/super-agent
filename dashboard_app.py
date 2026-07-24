@@ -337,7 +337,29 @@ def run_dashboard(port=8080, debug=False):
     app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)
 
 
-
+# Auto-start agents when Deployed (safety net if railway_run.py didn't fork)
+import sys as _sys
+import threading as _thr
+if os.environ.get("DEPLOY") == "true" and os.environ.get("RAILWAY_RUN") != "1":
+    def _safety_start():
+        import time
+        _sys.stdout.write("[AGENT] Safety net: starting agents...\n")
+        _sys.stdout.flush()
+        try:
+            from db.init_db import init_database
+            from config.settings import load_config
+            init_database(load_config().get("data_dir", "data"))
+            from master.orchestrator import Orchestrator
+            orch = Orchestrator()
+            _sys.stdout.write(f"[AGENT] {len(orch.agents)} agents loaded\n")
+            _sys.stdout.flush()
+            orch.run()
+        except Exception as e:
+            _sys.stdout.write(f"[AGENT] Error: {e}\n")
+            _sys.stdout.flush()
+            while True:
+                time.sleep(60)
+    _thr.Thread(target=_safety_start, daemon=True).start()
 
 if __name__ == "__main__":
     import sys
