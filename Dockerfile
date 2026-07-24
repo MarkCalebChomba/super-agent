@@ -9,9 +9,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt gunicorn
 
 COPY . .
-RUN mkdir -p data build_output && chmod +x start.sh
+RUN mkdir -p data build_output && chmod +x start.sh entrypoint.sh
 
 ENV DEPLOY=true
 EXPOSE 8080
 
-CMD ["bash", "entrypoint.sh"]
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--threads", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "dashboard_app:app"]

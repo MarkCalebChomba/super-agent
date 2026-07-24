@@ -1,81 +1,80 @@
-"""Run agents + dashboard together in Railway container (24/7 mode)."""
-import os, sys, threading, time, logging
+"""Start agents then serve dashboard (24/7)."""
+import os, sys, subprocess, time
 
-os.environ.setdefault("DEPLOY", "true")
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
-log = logging.getLogger("superagent")
+os.environ["DEPLOY"] = "true"
 
-log.info("=== Super Agent: Initializing (24/7 mode) ===")
+sys.stdout.write("[RAILWAY] Starting Super Agent...\n")
+sys.stdout.flush()
 
+# Init DB
+sys.stdout.write("[RAILWAY] Initializing database...\n")
+sys.stdout.flush()
 try:
     from db.init_db import init_database
     from config.settings import load_config
-    config = load_config()
-    log.info("Initializing databases...")
-    init_database(config.get("data_dir", "data"))
-    log.info("Database ready")
+    init_database(load_config().get("data_dir", "data"))
+    sys.stdout.write("[RAILWAY] Database ready\n")
+    sys.stdout.flush()
 except Exception as e:
-    log.error(f"DB init failed: {e}")
-    # Continue anyway - dashboard can still serve
+    sys.stdout.write(f"[RAILWAY] DB init warning: {e}\n")
+    sys.stdout.flush()
 
-def run_agents_forever():
-    """Start agents and keep them running 24/7."""
-    log.info("Starting agent orchestrator...")
-    max_retries = 100
-    retries = 0
-    while retries < max_retries:
-        try:
-            from master.orchestrator import Orchestrator
-            orch = Orchestrator()
-            log.info(f"Orchestrator created with {len(orch.agents)} agents")
-            orch.run()
-            log.warning("Orchestrator stopped unexpectedly")
-        except Exception as e:
-            retries += 1
-            log.error(f"Agent orchestrator error (attempt {retries}/{max_retries}): {e}")
-            time.sleep(10)
-    log.error("Agent orchestrator failed after max retries")
+# Write agent startup script to file
+with open("/tmp/start_agents.py", "w") as f:
+    f.write("""import sys, os
+os.environ['DEPLOY'] = 'true'
+sys.stdout.write('[AGENT] Starting...\\n')
+sys.stdout.flush()
+try:
+    from master.orchestrator import Orchestrator
+    from db.init_db import init_database
+    from config.settings import load_config
+    init_database(load_config().get('data_dir', 'data'))
+    orch = Orchestrator()
+    sys.stdout.write(f'[AGENT] {len(orch.agents)} agents loaded, running...\\n')
+    sys.stdout.flush()
+    orch.run()
+except Exception as e:
+    sys.stderr.write(f'[AGENT] FAILED: {e}\\n')
+    sys.stderr.flush()
+    import traceback
+    traceback.print_exc()
+""")
 
-agent_thread = threading.Thread(target=run_agents_forever, daemon=True, name="agent-runner")
-agent_thread.start()
-log.info("Agent thread started in background")
+# Start agents in background
+sys.stdout.write("[RAILWAY] Launching agent process...\n")
+sys.stdout.flush()
+agent_proc = subprocess.Popen(
+    [sys.executable, "-u", "/tmp/start_agents.py"],
+    stdout=open("/tmp/agent_stdout.log", "w"),
+    stderr=subprocess.STDOUT,
+)
+sys.stdout.write(f"[RAILWAY] Agent PID: {agent_proc.pid}\n")
+sys.stdout.flush()
+time.sleep(3)
 
-time.sleep(2)
+# Read back agent startup messages
+try:
+    with open("/tmp/agent_stdout.log") as f:
+        agent_out = f.read()
+        if agent_out:
+            sys.stdout.write(f"[RAILWAY] Agent output: {agent_out.strip()}\n")
+            sys.stdout.flush()
+except:
+    pass
 
-log.info("Starting gunicorn dashboard server on port 8080...")
-
-from dashboard_app import app
-
-if __name__ == "__main__":
-    import gunicorn.app.base
-    gunicorn.SERVER_SOFTWARE = "super-agent"
-
-    class AgentGunicorn(gunicorn.app.base.BaseApplication):
-        def __init__(self, app, options=None):
-            self.options = options or {}
-            self.application = app
-            super().__init__()
-        def load_config(self):
-            for key, value in self.options.items():
-                self.cfg.set(key, value)
-        def load(self):
-            return self.application
-
-    options = {
-        "bind": "0.0.0.0:8080",
-        "workers": 2,
-        "threads": 4,
-        "timeout": 120,
-        "loglevel": "info",
-        "accesslog": "-",
-        "errorlog": "-",
-        "capture_output": True,
-    }
-    log.info("Dashboard starting...")
-    try:
-        AgentGunicorn(app, options).run()
-    except Exception as e:
-        log.error(f"Gunicorn error: {e}")
-        # Keep container alive
-        while True:
-            time.sleep(60)
+# Start dashboard
+sys.stdout.write("[RAILWAY] Starting gunicorn...\n")
+sys.stdout.flush()
+proc = subprocess.Popen([
+    "gunicorn",
+    "--bind", "0.0.0.0:8080",
+    "--workers", "2", "--threads", "4",
+    "--timeout", "120",
+    "--access-logfile", "-",
+    "--error-logfile", "-",
+    "dashboard_app:app",
+])
+sys.stdout.write(f"[RAILWAY] Gunicorn PID: {proc.pid}\n")
+sys.stdout.flush()
+proc.wait()
