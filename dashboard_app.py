@@ -23,7 +23,7 @@ def seed_agents():
         return
     inst_dir = Path("instructions")
     if not inst_dir.exists():
-        print("WARNING: instructions/ directory not found", flush=True)
+        logger.warning("instructions/ directory not found at {}", inst_dir.resolve())
         return
     count = 0
     for f in sorted(inst_dir.glob("*.json")):
@@ -37,13 +37,11 @@ def seed_agents():
             if ok:
                 count += 1
             else:
-                print(f"  Failed to register {name}", flush=True)
+                logger.warning("Failed to register {}", name)
         except Exception as e:
-            print(f"  Error registering {name}: {e}", flush=True)
-    print(f"Seeded {count} agents from instructions/", flush=True)
-
-# Seed agents on module load so they appear on first request
-seed_agents()
+            logger.error("Error registering {}: {}", name, e)
+    if count:
+        logger.info("Seeded {} agents from instructions/", count)
 
 def get_sys_db():
     p = DATA_DIR / "system.db"
@@ -208,10 +206,8 @@ def api_agent_memory(name):
 @app.route("/api/agents")
 def api_agents():
     store = get_store()
+    seed_agents()
     agents = store.get_all_agents()
-    if not agents:
-        seed_agents()
-        agents = store.get_all_agents()
     live = get_live_data()
     for a in agents:
         a["build_count"] = get_build_count(a["agent_name"])
