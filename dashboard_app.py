@@ -337,36 +337,7 @@ def run_dashboard(port=8080, debug=False):
     app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)
 
 
-# === Auto-start agents (24/7 Railway mode) ===
-import sys as _sys
-import threading as _thr
 
-def _bootstrap():
-    import time as _time
-    _sys.stderr.write("[SuperAgent] Bootstrapping agents...\n")
-    _sys.stderr.flush()
-    try:
-        from db.init_db import init_database
-        from config.settings import load_config
-        cfg = load_config()
-        init_database(cfg.get("data_dir", "data"))
-        _sys.stderr.write("[SuperAgent] DB initialized\n")
-        _sys.stderr.flush()
-
-        from master.orchestrator import Orchestrator
-        orch = Orchestrator()
-        _sys.stderr.write(f"[SuperAgent] Orchestrator: {len(orch.agents)} agents\n")
-        _sys.stderr.flush()
-        orch.run()
-    except Exception as e:
-        _sys.stderr.write(f"[SuperAgent] FATAL: {e}\n")
-        _sys.stderr.flush()
-        while True:
-            _time.sleep(60)
-
-if os.environ.get("DEPLOY") == "true":
-    _t = _thr.Thread(target=_bootstrap, daemon=True)
-    _t.start()
 
 if __name__ == "__main__":
     import sys

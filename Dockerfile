@@ -14,4 +14,4 @@ RUN mkdir -p data build_output && chmod +x start.sh
 ENV DEPLOY=true
 EXPOSE 8080
 
-CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "2", "--threads", "4", "--timeout", "120", "--access-logfile", "-", "--error-logfile", "-", "dashboard_app:app"]
+CMD ["python", "railway_run.py"]
