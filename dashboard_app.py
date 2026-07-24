@@ -337,6 +337,34 @@ def run_dashboard(port=8080, debug=False):
     app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=False)
 
 
+# === Auto-start agents when deployed (Railway / production) ===
+if os.environ.get("DEPLOY") == "true":
+    import threading as _thr
+    print("[SuperAgent] DEPLOY mode — initializing agents in background...")
+    try:
+        from db.init_db import init_database
+        from config.settings import load_config
+        init_database(load_config().get("data_dir", "data"))
+        print("[SuperAgent] Database ready")
+
+        def _start_agents():
+            import time
+            try:
+                from master.orchestrator import Orchestrator
+                orch = Orchestrator()
+                print(f"[SuperAgent] Orchestrator loaded with {len(orch.agents)} agents")
+                orch.run()
+            except Exception as e:
+                print(f"[SuperAgent] Agent runtime error: {e}")
+                while True:
+                    time.sleep(60)
+
+        _t = _thr.Thread(target=_start_agents, daemon=True)
+        _t.start()
+        print("[SuperAgent] Agents started in background")
+    except Exception as e:
+        print(f"[SuperAgent] Init error: {e}")
+
 if __name__ == "__main__":
     import sys
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
