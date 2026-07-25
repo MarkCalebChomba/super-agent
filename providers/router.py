@@ -4,6 +4,7 @@ import json
 from typing import Optional, Literal
 from loguru import logger
 import requests
+from openai import OpenAI
 
 ModelTier = Literal["cheap", "balanced", "powerful"]
 
@@ -41,12 +42,11 @@ def _try_hermes(prompt: str, system: str,
                 max_tokens: int, temperature: float) -> Optional[str]:
     """Route through Hermes Agent hosted on Hugging Face Spaces.
     
-    Hermes (Nous Research, 219k★) handles LLM routing, web search,
-    and research tools remotely. Every agent runs on this.
+    Hermes handles LLM routing, web search, and research tools remotely.
     Falls back to local providers if unreachable.
     """
     client = _get_hermes_hf()
-    if not client:
+    if not client or not client.available:
         return None
     return client.complete(
         prompt=prompt,
@@ -136,12 +136,13 @@ class LLMRouter:
     def _try_nvidia(self, prompt: str, system: str,
                     max_tokens: int, temperature: float) -> Optional[str]:
         """Call NVIDIA DeepSeek V4 Flash via OpenAI-compatible API."""
+        if not self.nvidia_key:
+            return None
         try:
-            from openai import OpenAI
             client = OpenAI(
                 base_url=self.NVIDIA_BASE,
                 api_key=self.nvidia_key,
-                timeout=60,
+                timeout=90,
             )
             completion = client.chat.completions.create(
                 model=self.NVIDIA_MODEL,
@@ -152,14 +153,17 @@ class LLMRouter:
                 temperature=temperature,
                 top_p=0.95,
                 max_tokens=max_tokens if max_tokens <= 16384 else 16384,
-                extra_body={"chat_template_kwargs": {"thinking": True, "reasoning_effort": "high"}},
                 stream=False,
             )
             content = completion.choices[0].message.content
             if content:
                 return content
         except Exception as e:
-            logger.debug(f"NVIDIA DeepSeek V4 Flash failed: {e}")
+            err_str = str(e)
+            logger.debug(f"NVIDIA DeepSeek V4 Flash failed: {err_str[:120]}")
+            if "503" in err_str or "ResourceExhausted" in err_str or "429" in err_str:
+                logger.info("NVIDIA rate limited, backing off 15s")
+                time.sleep(15)
         return None
 
     def _try_openrouter(self, prompt: str, system: str,

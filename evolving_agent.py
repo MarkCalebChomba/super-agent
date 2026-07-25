@@ -464,27 +464,17 @@ class EvolvingAgent:
             pass
 
     def _execute_via_hermes(self, prompt: str) -> dict:
-        """Execute via Hermes HF API."""
+        """Execute via LLM router (NVIDIA DeepSeek V4 Flash with fallbacks)."""
         start = time.time()
         logger.info(f"{self.name}: executing via Hermes")
         try:
-            from hermes_integration.hermes_hf_client import HermesHFClient
-            client = HermesHFClient()
-            if not client.available:
-                from providers.router import LLMRouter
-                llm = LLMRouter()
-                output = llm.complete(
-                    "Execute your purpose based on your system prompt.\n\nSystem:\n" + prompt,
-                    system="You are an autonomous AI agent. Execute your purpose.",
-                    max_tokens=4096,
-                )
-            else:
-                output = client.complete(
-                    prompt="Execute your purpose based on your system prompt.",
-                    system=prompt,
-                    agent_name=self.name,
-                    max_tokens=4096,
-                )
+            from providers.router import LLMRouter
+            llm = LLMRouter()
+            output = llm.complete(
+                prompt,
+                system="You are an autonomous AI agent. Execute your purpose.",
+                max_tokens=4096,
+            )
 
             duration = int((time.time() - start) * 1000)
 
@@ -510,7 +500,7 @@ class EvolvingAgent:
         except Exception as e:
             duration = int((time.time() - start) * 1000)
             self._log_chat(prompt, None, "hermes", False, str(e), duration)
-            logger.error(f"{self.name}: execution failed: {result.get('error', 'unknown') if result else 'no execution mode'}")
+            logger.error(f"{self.name}: LLM execution failed: {e}")
             return {"success": False, "error": str(e)}
 
     def _execute_via_browser(self, prompt: str, resources: dict) -> dict:
