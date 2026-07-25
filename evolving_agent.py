@@ -2,10 +2,11 @@
 
 Each agent starts with a single instruction like "make money by doing X".
 Over time it:
-- Discovers what resources (accounts, API keys) it needs
-- Spawns sub-agents for platform-specific variations
+- Plans, acts, observes via a structured Plan→Act→Observe loop
+- Stores experiences in multi-tiered memory (working + long-term)
+- Keeps the North Star goal in every prompt
+- Retries with different approaches before giving up
 - Learns from outcomes and evolves its own instruction set
-- Requests missing resources from human via needs channel
 """
 
 import os
@@ -17,6 +18,8 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from loguru import logger
+from agent_memory import AgentMemory
+from agent_orchestrator import AgentOrchestrator
 
 
 class EvolvingAgent:
@@ -52,6 +55,10 @@ class EvolvingAgent:
         self._load_or_init_instruction_set(seed_instruction)
         self._load_secrets()
         self._load_resource_registry()
+
+        # Multi-tiered memory + orchestrator
+        self.memory = AgentMemory(agent_name, data_dir=str(self.DATA_DIR))
+        self.orchestrator = AgentOrchestrator(self, self.memory)
 
     def _load_or_init_instruction_set(self, seed_instruction: str = None):
         """Load instruction set from file or initialize from seed."""
@@ -411,90 +418,36 @@ class EvolvingAgent:
         return "\n".join(parts)
 
     def run_cycle(self) -> dict:
-        """One full cycle: check resources, build prompt, execute, learn, evolve."""
+        """One full Plan ⭢ Act ⭢ Observe ⭢ Adapt cycle."""
         self.cycle_count += 1
         logger.info(f"{self.name} cycle {self.cycle_count}")
 
-        # Update live tracker for dashboard
         try:
             from live_tracker import update as _lt_update
-            _lt_update(self.name, input_text=f"Cycle {self.cycle_count}: checking resources")
+            _lt_update(self.name, input_text=f"Cycle {self.cycle_count}: planning")
         except Exception:
             pass
 
-        resources = self.check_available_resources()
+        result = self.orchestrator.run_cycle()
 
-        provisioned = {rid: r for rid, r in resources.items() if r.get("status") == "provisioned"}
-        required_missing = [
-            rid for rid, r in resources.items()
-            if r.get("status") == "missing" and r.get("required", True)
-        ]
-
-        if required_missing:
-            for rid in required_missing:
-                resource_def = next(
-                    (r for r in self.instruction_set.get("resources_required", []) if r["id"] == rid),
-                    None
-                )
-
-                if resource_def and resource_def.get("self_provisionable"):
-                    success = self.self_provision_resource(rid)
-                    if success:
-                        continue
-
-                self.request_resource(rid)
-
-            if not provisioned:
-                self.learn_from_outcome({
-                    "output": None,
-                    "success": False,
-                    "errors": [f"Missing required resources: {required_missing}"],
-                    "lesson": f"Need resources provisioned before execution: {', '.join(required_missing)}",
-                })
-                return {"output": None, "success": False, "idle": True}
-
-        prompt = self.build_system_prompt()
-        try:
-            from live_tracker import update as _lt_update
-            _lt_update(self.name, input_text=prompt[:500])
-        except Exception:
-            pass
-
-        available_modes = set(r.get("execution_mode", "hermes") for r in provisioned.values())
-        if not available_modes:
-            available_modes = {"hermes"}
-
-        result = None
-        for mode in available_modes:
-            if mode == "hermes":
-                result = self._execute_via_hermes(prompt)
-            elif mode == "browser":
-                result = self._execute_via_browser(prompt, provisioned)
-            elif mode == "api":
-                result = self._execute_via_api(prompt, provisioned)
-
-        if result and result.get("success"):
-            self._maybe_spawn_sub_agent(result)
-            self.learn_from_outcome(result)
-            try:
-                from live_tracker import update as _lt_update
-                _lt_update(self.name, output_text=result.get("output", "")[:500])
-            except Exception:
-                pass
+        # Track outcome in instruction set
+        if result.get("success"):
+            self.instruction_set.setdefault("performance", {})["successful_outputs"] = \
+                self.instruction_set["performance"].get("successful_outputs", 0) + 1
         else:
-            self.learn_from_outcome({
-                "output": None,
-                "success": False,
-                "errors": [result.get("error", "Unknown execution error")] if result else ["No execution mode available"],
-                "lesson": "Execution failed, no lesson extracted",
-            })
-            try:
-                from live_tracker import update as _lt_update
-                _lt_update(self.name, output_text=f"FAILED: {result.get('error', 'unknown')}"[:500])
-            except Exception:
-                pass
+            self.instruction_set.setdefault("performance", {})["failed_outputs"] = \
+                self.instruction_set["performance"].get("failed_outputs", 0) + 1
+        self.instruction_set["performance"]["cycles_run"] = self.cycle_count
+        self._save_instruction_set()
 
-        return result or {"output": None, "success": False}
+        try:
+            from live_tracker import update as _lt_update
+            txt = (result.get("output") or "")[:200]
+            _lt_update(self.name, output_text=f"{result.get('verdict','?')}: {txt}")
+        except Exception:
+            pass
+
+        return result
 
     def _log_chat(self, input_text: str, output_text: str = None,
                    mode: str = "hermes", success: bool = False,
@@ -628,9 +581,10 @@ class EvolvingAgent:
             )
 
     def run_loop(self, max_cycles: int = None):
-        """Main execution loop."""
+        """Main execution loop using Plan→Act→Observe."""
         self.running = True
-        logger.info(f"{self.name} started")
+        self.orchestrator.load_north_star()
+        logger.info(f"{self.name} started — North Star: {self.orchestrator.north_star[:80]}")
 
         try:
             while self.running:
@@ -638,16 +592,25 @@ class EvolvingAgent:
                     break
 
                 result = self.run_cycle()
+                verdict = result.get("verdict", "?")
 
-                if result.get("idle"):
-                    logger.info(f"{self.name}: idle (waiting for resources)")
-                    time.sleep(30)
-                elif result.get("success"):
-                    logger.info(f"{self.name}: cycle completed successfully")
+                if verdict == "completed":
+                    logger.info(f"{self.name}: task completed ✓")
+                    time.sleep(3)
+                elif verdict == "partial":
+                    logger.info(f"{self.name}: partial progress")
+                    time.sleep(3)
+                elif verdict == "impossible":
+                    logger.warning(f"{self.name}: task deemed impossible after retries")
+                    time.sleep(5)
+                elif verdict == "retry":
+                    logger.warning(f"{self.name}: retrying with different approach")
                     time.sleep(5)
                 else:
-                    logger.warning(f"{self.name}: cycle failed")
-                    time.sleep(15)
+                    logger.warning(f"{self.name}: cycle finished ({verdict})")
+                    time.sleep(10)
+
+                self.memory.save_all()
 
         except KeyboardInterrupt:
             logger.info(f"{self.name} stopped by user")
@@ -655,6 +618,7 @@ class EvolvingAgent:
             logger.error(f"{self.name} crashed: {e}")
         finally:
             self.running = False
+            self.memory.save_all()
             logger.info(f"{self.name} stopped after {self.cycle_count} cycles")
 
     def stop(self):
