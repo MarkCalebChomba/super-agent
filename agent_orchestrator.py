@@ -1,34 +1,70 @@
-"""Plan ⭢ Act ⭢ Observe execution loop with tenacity and memory.
+"""Multi-agent hierarchy: Supervisor -> Worker -> Critic workflow loop.
 
 Architecture:
-  Planner  — breaks North Star goal into actionable task queue
-  Executor — runs each task via LLM with memory-context augmentation
-  Evaluator — checks result, decides: completed / retry / impossible
-  Tenacity — dynamic retries with varied approaches, frustration threshold
+  Supervisor — holds the North Star, decomposes goals into sub-tasks,
+              delegates to Workers, reviews Critic feedback, issues revisions
+  Worker    — executes a sub-task via LLM and submits output
+  Critic    — evaluates Worker output against a strict rubric:
+              1. Technical/quality standards
+              2. Commercial / monetisation value
+              3. Progress toward the primary goal
+              Returns: passed | needs_revision | failed
 
-Memory tiers:
-  Working — current task, conversation buffer, frustration state (in-memory)
-  Long-term — experiences stored as JSON files (keyword-retrievable)
-  North Star — original goal injected into every LLM call
+Workflow:
+  1. Supervisor decomposes goal -> task queue
+  2. Supervisor assigns next task to Worker
+  3. Worker executes -> submits output
+  4. Critic reviews output against rubric
+  5. If passed -> Supervisor updates context, moves to next task
+  6. If needs_revision -> Supervisor generates specific feedback,
+     Worker revises (loop up to max_revisions)
+  7. If failed -> task marked impossible, Supervisor logs lesson
 """
 import json
 import time
-from datetime import datetime
 from typing import Optional
+from datetime import datetime
 from loguru import logger
 
 
+CRITIC_RUBRIC = """## Value Assessment Protocol
+
+Evaluate the submitted work against these criteria:
+
+### 1. Technical Standards (pass/fail)
+- Is the output well-reasoned and logically sound?
+- Does it demonstrate competence in the domain?
+- Is it actionable, not just theoretical?
+
+### 2. Commercial Value (pass/fail)
+- Does this create a DIRECT path to revenue or cost reduction?
+- Does this build an ASSET that can be monetised later?
+- Is there a clear "who would pay for this" answer?
+- If copied from an existing source, is it personalised enough to be competitive?
+
+### 3. Goal Alignment (pass/fail)
+- Does this move us closer to the primary mission?
+- Is it focused on execution rather than planning?
+- Does it avoid scope creep / irrelevant tangents?
+
+### Output Rules
+- You MUST return valid JSON with exactly these fields:
+  {"verdict":"passed|needs_revision|failed","score":0-10,"strengths":[],"weaknesses":[],"feedback":"specific actionable criticism","commercial_value":"explanation of revenue potential"}
+"""
+
+
 class AgentOrchestrator:
-    """Plan ⭢ Act ⭢ Observe loop for a single agent."""
+    """Supervisor -> Worker -> Critic loop for a single agent."""
 
     def __init__(self, agent, memory,
-                 max_attempts_per_task: int = 5,
+                 max_revisions: int = 3,
                  frustration_threshold: int = 3):
         self.agent = agent
         self.memory = memory
-        self.max_attempts = max_attempts_per_task
+        self.max_revisions = max_revisions
         self.frustration_threshold = frustration_threshold
         self.north_star = ""
+        self.revision_count = 0
 
     # ── North Star ─────────────────────────────────────────────────
 
@@ -41,33 +77,33 @@ class AgentOrchestrator:
             or ""
         )
 
-    # ── PLAN: task queue ───────────────────────────────────────────
+    # ── SUPERVISOR: Plan ───────────────────────────────────────────
 
-    def plan_phase(self) -> list[dict]:
-        """Break the North Star goal into actionable tasks via LLM."""
+    def supervisor_plan(self) -> list[dict]:
+        """Break goal into actionable sub-tasks."""
         self.load_north_star()
 
         pending = self.memory.pending_tasks()
         if pending:
             return pending
 
-        prompt = f"""You are an AI agent with this mission:
+        prompt = f"""You are the SUPERVISOR. Your mission:
 
 {self.north_star}
 
-Break this mission into 3-5 concrete, actionable tasks. Each task must:
-- Be specific and measurable
-- Have clear success criteria
-- Be achievable with text generation and reasoning
+Decompose this mission into 3-5 concrete sub-tasks. Each sub-task must:
 
-Return ONLY a JSON array of objects, each with:
-  "id": unique name like "task_research"
-  "description": what to do
-  "success_criteria": how to know it's done
-  "tags": ["keyword1", "keyword2"]
+1. Be specific and actionable by a Worker agent
+2. Have a clear "done" criterion
+3. Produce a tangible output (research, analysis, plan, asset)
+4. For scripts/code: instruct the worker to FIND existing solutions on GitHub, YouTube, TikTok, or marketplaces rather than writing from scratch. The worker should personalise and monetise what already works.
+5. For content: instruct to find high-performing examples and adapt them.
+
+Return ONLY a JSON array of objects:
+  {{"id":"task_unique_name","description":"what to do","success_criteria":"how to verify","tags":["tag1","tag2"],"constraints":"any specific constraints"}}
 
 Example:
-[{{"id":"task_analyze_market","description":"Research current market conditions to identify opportunities","success_criteria":"Top 3 opportunities identified with reasoning","tags":["research","analysis"]}}]
+[{{"id":"research_market","description":"Research top-performing affiliate programs for crypto trading","success_criteria":"List of 5 programs with commission rates and requirements","tags":["research","affiliate"],"constraints":"Focus on programs that pay in crypto"}}]
 """
         output = self._call_llm(prompt)
         if output:
@@ -75,198 +111,242 @@ Example:
                 tasks = json.loads(output)
                 if isinstance(tasks, list):
                     for t in tasks:
-                        t.setdefault("dependencies", [])
                         t.setdefault("status", "pending")
                         t.setdefault("attempts", 0)
+                        t.setdefault("revisions", 0)
                         self.memory.add_task(t)
                     return tasks
             except json.JSONDecodeError:
-                logger.warning(f"Failed to parse LLM task plan for {self.agent.name}")
+                logger.warning(f"Supervisor plan parse failed for {self.agent.name}")
 
         fallback = [{
             "id": "execute_mission",
             "description": self.north_star or "Execute your purpose",
             "success_criteria": "Make measurable progress toward the goal",
             "tags": ["mission"],
-            "dependencies": [],
-            "status": "pending",
-            "attempts": 0,
+            "status": "pending", "attempts": 0, "revisions": 0,
         }]
         self.memory.add_task(fallback[0])
         return fallback
 
-    # ── ACT: execute a task ────────────────────────────────────────
+    # ── SUPERVISOR: Generate revision feedback ─────────────────────
 
-    def act_phase(self, task: dict) -> dict:
-        """Execute a single task via LLM, augmented with memory context."""
+    def supervisor_revise(self, task: dict, critique: dict) -> str:
+        """Supervisor generates specific revision instructions."""
+        feedback = critique.get("feedback", "Improve the output.")
+        weaknesses = critique.get("weaknesses", [])
+        w_list = "\n".join(f"- {w}" for w in weaknesses)
+
+        prompt = f"""You are the SUPERVISOR reviewing a Worker's failed submission.
+
+Mission: {self.north_star}
+Task: {task['description']}
+Critique feedback: {feedback}
+Weaknesses identified:
+{w_list}
+
+Generate 2-3 specific, actionable revision instructions for the Worker.
+Focus on what to CHANGE, not just what's wrong.
+Consider how existing solutions (GitHub, YouTube, tutorials) could be adapted.
+Return a JSON object:
+  {{"revision_instructions":["instruction 1","instruction 2","instruction 3"],"priority":"what to focus on first"}}
+"""
+        result = self._call_llm(prompt)
+        if result:
+            try:
+                return json.loads(result).get("revision_instructions", [result])
+            except json.JSONDecodeError:
+                return [result]
+        return ["Improve the output based on the critique feedback."]
+
+    # ── WORKER: Execute ────────────────────────────────────────────
+
+    def worker_execute(self, task: dict, revision_hint: str = "") -> dict:
+        """Worker executes a sub-task and submits output."""
         relevant = self.memory.query_memory(task.get("description", ""), limit=3)
-        frustration = self.memory.get_frustration()
-        attempts = self.memory.attempts_for(task["id"])
+        revision = self.memory.working.get("current_revision", 0)
         tried = self.memory.tried_approaches_for(task["id"])
 
-        # Build context blocks
-        parts = [f"## YOUR MISSION (North Star)\n{self.north_star}"]
-
-        parts.append(f"## CURRENT TASK\n{task['description']}")
+        parts = [f"## MISSION (North Star)\n{self.north_star}"]
+        parts.append(f"## YOUR ROLE\nYou are a Worker agent executing a specific task.")
+        parts.append(f"## TASK\n{task['description']}")
         parts.append(f"## SUCCESS CRITERIA\n{task['success_criteria']}")
+
+        if task.get("constraints"):
+            parts.append(f"## CONSTRAINTS\n{task['constraints']}")
+
+        if revision_hint:
+            parts.append(f"## REVISION INSTRUCTIONS\n{revision_hint}")
 
         if relevant:
             mem = "\n".join(
-                f"{'✓' if e['success'] else '✗'} {e['action'][:100]}"
+                f"{'✓' if e['success'] else '✗'} {e['action'][:120]}"
                 for e in relevant
             )
-            parts.append(f"## RELEVANT PAST EXPERIENCES\n{mem}")
+            parts.append(f"## PAST EXPERIENCES\n{mem}")
 
         if tried:
-            parts.append("## APPROACHES ALREADY TRIED (do not repeat)")
+            parts.append("## APPROACHES ALREADY TRIED (avoid repeating)")
             parts.extend(f"- {a}" for a in tried)
 
-        if frustration > 0:
-            parts.append(
-                f"\nNOTE: You have failed {frustration} time(s). "
-                f"Try a COMPLETELY DIFFERENT approach."
-            )
-        if attempts >= self.frustration_threshold:
-            parts.append("\nWARNING: This is your last attempt before giving up on this task.")
+        if revision > 0:
+            parts.append(f"\nThis is revision {revision}. Make sure your output addresses ALL previous feedback.")
 
-        parts.append("""## INSTRUCTIONS
-1. Execute the task using your knowledge and reasoning
-2. Provide concrete output — not just plans or ideas
-3. If you hit a roadblock, try a different angle
-4. End with one of:
-   "TASK COMPLETE: <summary>" if you succeeded
-   "TASK FAILED: <reason>" if you cannot complete it
-   "PARTIAL: <what you achieved>" if you made progress
+        parts.append("""## OUTPUT REQUIREMENTS
+1. Provide concrete output — not just plans or ideas
+2. If relevant: cite existing solutions, sources, or market data
+3. End with SUBMISSION: followed by a brief summary of what you produced
 
 ## OUTPUT
 """)
 
         prompt = "\n\n".join(parts)
         result_text = self._call_llm(prompt)
-
         if result_text:
-            upper = result_text.upper()
-            success = "TASK COMPLETE" in upper
-            partial = "PARTIAL" in upper
-            return {
-                "output": result_text,
-                "success": success,
-                "partial": partial,
-            }
-        return {"output": None, "success": False, "error": "LLM returned no output"}
+            return {"output": result_text, "success": True}
+        return {"output": None, "success": False, "error": "Worker returned no output"}
 
-    # ── OBSERVE / EVALUATE ─────────────────────────────────────────
+    # ── CRITIC: Evaluate ───────────────────────────────────────────
 
-    def evaluate_phase(self, task: dict, result: dict) -> str:
-        """Return verdict: 'completed', 'retry', 'impossible', or 'partial'."""
-        if result.get("success"):
-            self.memory.store_experience(
-                action=f"Task completed: {task['description']}",
-                result=result,
-                tags=task.get("tags", []) + ["completed"],
-            )
-            self.memory.update_task(task["id"], {"status": "completed"})
-            self.memory.reset_frustration()
-            return "completed"
+    def critic_evaluate(self, task: dict, output: str) -> dict:
+        """Critic evaluates Worker output against rubric."""
+        prompt = f"""You are the CRITIC. Your job is to evaluate the Worker's output against a strict rubric.
 
-        if result.get("partial"):
-            self.memory.store_experience(
-                action=f"Partial progress on: {task['description']}",
-                result=result,
-                tags=task.get("tags", []) + ["partial"],
-            )
-            self.memory.reset_frustration()
-            return "partial"
+## Mission
+{self.north_star}
 
-        # Failure
-        self.memory.increment_frustration()
-        self.memory.record_attempt(task["id"], (result.get("output") or "")[:150])
-        self.memory.store_experience(
-            action=f"Attempt {self.memory.attempts_for(task['id'])}: {task['description']}",
-            result=result,
-            tags=task.get("tags", []) + ["failed"],
-        )
+## Task Assigned
+{task['description']}
 
-        if self.memory.get_frustration() >= self.frustration_threshold:
-            self.memory.update_task(task["id"], {"status": "impossible"})
-            self.memory.reset_frustration()
-            return "impossible"
+## Success Criteria
+{task['success_criteria']}
 
-        return "retry"
+## Worker Output
+{output[:4000]}
 
-    # ── ADAPT ──────────────────────────────────────────────────────
-
-    def adapt_phase(self, task: dict, result: dict, verdict: str):
-        """After evaluation, decide what to do next."""
-        if verdict in ("completed", "partial"):
-            return
-
-        if verdict == "impossible":
-            summary = self._call_llm(
-                f"Task failed after exhausting approaches.\n\n"
-                f"Task: {task['description']}\n"
-                f"Last result: {(result.get('output') or '')[:500]}\n\n"
-                f"Summarize what was learned and what could be tried differently with new resources:"
-            )
-            if summary:
-                self.memory.store_experience(
-                    action=f"Post-mortem: {task['description']}",
-                    result={"success": False, "output": summary},
-                    tags=["postmortem", "failed"],
-                )
-            return
-
-        # retry — generate a different micro-approach
-        micro = self._call_llm(
-            f"Task failed. Generate ONE different approach.\n\n"
-            f"Task: {task['description']}\n"
-            f"Previous result: {(result.get('output') or '')[:300]}\n\n"
-            f"Return a JSON object with:\n"
-            f'  {{"approach": "what to do differently", "reason": "why this might work"}}'
-        )
-        if micro:
+{CRITIC_RUBRIC}
+"""
+        result = self._call_llm(prompt)
+        if result:
             try:
-                plan = json.loads(micro)
-                subtask = {
-                    "id": f"{task['id']}_retry_{self.memory.attempts_for(task['id'])}",
-                    "description": plan.get("approach", task["description"]),
-                    "success_criteria": plan.get("reason", task.get("success_criteria", "")),
-                    "tags": task.get("tags", []) + ["retry"],
-                    "dependencies": task.get("dependencies", []),
-                    "status": "pending",
-                    "attempts": 0,
-                }
-                self.memory.add_task(subtask)
-            except json.JSONDecodeError:
-                pass
+                critique = json.loads(result)
+                critique.setdefault("verdict", "needs_revision")
+                critique.setdefault("score", 5)
+                critique.setdefault("weaknesses", [])
+                critique.setdefault("feedback", "Review the output.")
+                return critique
+            except (json.JSONDecodeError, TypeError):
+                # If LLM didn't return valid JSON, extract verdict heuristically
+                upper = result.upper()
+                if "PASS" in upper:
+                    return {"verdict": "passed", "score": 7, "weaknesses": [],
+                            "feedback": result[:300], "commercial_value": "See output"}
+                return {"verdict": "needs_revision", "score": 5,
+                        "weaknesses": ["Output format incorrect"],
+                        "feedback": result[:300], "commercial_value": "Not assessed"}
+        return {"verdict": "failed", "score": 0,
+                "weaknesses": ["Critic could not evaluate"],
+                "feedback": "No output to evaluate", "commercial_value": "None"}
 
-    # ── Main cycle ─────────────────────────────────────────────────
+    # ── Main workflow loop ─────────────────────────────────────────
 
-    def get_next_action(self) -> Optional[dict]:
+    def get_next_task(self) -> Optional[dict]:
         task = self.memory.get_next_task()
         if task:
             return task
-        planned = self.plan_phase()
+        planned = self.supervisor_plan()
         return planned[0] if planned else None
 
     def run_cycle(self) -> dict:
-        """One full Plan ⭢ Act ⭢ Observe ⭢ Adapt cycle."""
+        """One full Supervisor -> Worker -> Critic workflow cycle."""
         self.load_north_star()
 
-        task = self.get_next_action()
+        task = self.get_next_task()
         if not task:
             return {"output": None, "success": False, "idle": True}
 
         self.memory.working["current_task"] = task
+        self.revision_count = 0
+        revision_hint = ""
 
-        result = self.act_phase(task)
-        verdict = self.evaluate_phase(task, result)
-        self.adapt_phase(task, result, verdict)
+        # Revision loop
+        while self.revision_count <= self.max_revisions:
+            # WORKER: execute
+            result = self.worker_execute(task, revision_hint)
+            if not result.get("output"):
+                self.memory.store_experience(
+                    action=f"Worker failed: {task['description']}",
+                    result={"success": False, "error": "No output"},
+                    tags=task.get("tags", []) + ["worker_failed"],
+                )
+                break
 
-        result["verdict"] = verdict
-        result["task_id"] = task["id"]
-        return result
+            # CRITIC: evaluate
+            critique = self.critic_evaluate(task, result["output"])
+            logger.info(f"{self.agent.name} | {task['id']} | "
+                        f"verdict={critique.get('verdict')} "
+                        f"score={critique.get('score')}/10")
+
+            verdict = critique.get("verdict", "needs_revision")
+
+            if verdict == "passed":
+                # SUCCESS: task complete
+                self.memory.store_experience(
+                    action=f"Task passed: {task['description']}",
+                    result={"success": True, "output": result["output"]},
+                    tags=task.get("tags", []) + ["completed"],
+                )
+                self.memory.update_task(task["id"], {"status": "completed"})
+                self.memory.reset_frustration()
+                result["critique"] = critique
+                result["verdict"] = "completed"
+                return result
+
+            elif verdict == "needs_revision":
+                # REVISE: supervisor generates feedback, worker retries
+                self.revision_count += 1
+                self.memory.working["current_revision"] = self.revision_count
+                self.memory.record_attempt(task["id"], result["output"][:150])
+
+                if self.revision_count >= self.max_revisions:
+                    logger.info(f"{self.agent.name} | max revisions ({self.max_revisions}) reached")
+                    break
+
+                # Supervisor generates revision instructions
+                revision_hint_list = self.supervisor_revise(task, critique)
+                if isinstance(revision_hint_list, list):
+                    revision_hint = "\n".join(f"- {h}" for h in revision_hint_list)
+                else:
+                    revision_hint = str(revision_hint_list)
+
+                self.memory.store_experience(
+                    action=f"Revision {self.revision_count}: {task['description']}",
+                    result={"success": False, "output": result["output"],
+                            "feedback": critique.get("feedback", "")},
+                    tags=task.get("tags", []) + ["revision"],
+                )
+                continue
+
+            else:  # failed
+                break
+
+        # FAILED after all revisions
+        self.memory.increment_frustration()
+        self.memory.store_experience(
+            action=f"Task failed after {self.revision_count} revisions: {task['description']}",
+            result={"success": False, "output": result.get("output", "")},
+            tags=task.get("tags", []) + ["failed"],
+        )
+        self.memory.update_task(task["id"], {"status": "impossible"})
+        self.memory.reset_frustration()
+
+        return {
+            "output": result.get("output"),
+            "success": False,
+            "verdict": "impossible" if self.memory.get_frustration() >= self.frustration_threshold else "failed",
+            "critique": critique if 'critique' in locals() else None,
+            "revisions": self.revision_count,
+        }
 
     def _call_llm(self, prompt: str) -> Optional[str]:
-        """Call the agent's LLM execution path."""
         return self.agent._execute_via_hermes(prompt).get("output")

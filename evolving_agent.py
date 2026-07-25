@@ -571,7 +571,7 @@ class EvolvingAgent:
             )
 
     def run_loop(self, max_cycles: int = None):
-        """Main execution loop using Plan→Act→Observe."""
+        """Main execution loop using Supervisor -> Worker -> Critic workflow."""
         self.running = True
         self.orchestrator.load_north_star()
         logger.info(f"{self.name} started — North Star: {self.orchestrator.north_star[:80]}")
@@ -583,22 +583,21 @@ class EvolvingAgent:
 
                 result = self.run_cycle()
                 verdict = result.get("verdict", "?")
+                revisions = result.get("revisions", 0)
+                score = result.get("critique", {}).get("score", "?") if result.get("critique") else "?"
 
                 if verdict == "completed":
-                    logger.info(f"{self.name}: task completed ✓")
+                    logger.info(f"{self.name} | task completed ✓ (score {score}/10)")
                     time.sleep(3)
-                elif verdict == "partial":
-                    logger.info(f"{self.name}: partial progress")
-                    time.sleep(3)
-                elif verdict == "impossible":
-                    logger.warning(f"{self.name}: task deemed impossible after retries")
+                elif verdict == "failed":
+                    logger.warning(f"{self.name} | task failed after {revisions} revisions")
                     time.sleep(5)
-                elif verdict == "retry":
-                    logger.warning(f"{self.name}: retrying with different approach")
+                elif verdict == "impossible":
+                    logger.warning(f"{self.name} | task impossible after {revisions} revisions, moving on")
                     time.sleep(5)
                 else:
-                    logger.warning(f"{self.name}: cycle finished ({verdict})")
-                    time.sleep(10)
+                    logger.info(f"{self.name} | cycle finished ({verdict})")
+                    time.sleep(8)
 
                 self.memory.save_all()
 
@@ -606,6 +605,8 @@ class EvolvingAgent:
             logger.info(f"{self.name} stopped by user")
         except Exception as e:
             logger.error(f"{self.name} crashed: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
             self.running = False
             self.memory.save_all()
