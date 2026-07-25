@@ -54,9 +54,9 @@ class AgentMemory:
     def store_experience(self, action: str, result: dict, tags: list[str] = None):
         self.experiences.append({
             "timestamp": datetime.now().isoformat(),
-            "action": action,
+            "action": action or "",
             "success": result.get("success", False),
-            "output": result.get("output", result.get("error", "")),
+            "output": (result.get("output") or result.get("error") or "")[:1000],
             "tags": tags or [],
         })
         self._save_json(self.memories_file, self.experiences)
@@ -69,7 +69,9 @@ class AgentMemory:
         scored = []
         for exp in self.experiences:
             score = 0
-            text = (exp["action"] + " " + exp["output"]).lower()
+            action = exp.get("action") or ""
+            output = exp.get("output") or ""
+            text = (action + " " + output).lower()
             for word in query_words:
                 if word in text:
                     score += 1
