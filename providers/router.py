@@ -22,6 +22,8 @@ import requests
 from openai import OpenAI, DefaultHttpxClient
 import httpx
 
+ModelTier = Literal["cheap", "balanced", "powerful"]
+
 # All models must be >200B parameters. No small models.
 MODEL_TIERS = {
     "cheap": {
