@@ -24,19 +24,23 @@ COOKIES_DIR = Path("data") / "cookies"
 PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 COOKIES_DIR.mkdir(parents=True, exist_ok=True)
 
-_playwright_instance = None
-_browser_instance = None
+import threading
+_thread_local = threading.local()
 
 
 def _get_browser() -> tuple:
-    """Get or create shared Playwright browser instance (singleton)."""
-    global _playwright_instance, _browser_instance
-    if _browser_instance and _browser_instance.is_connected():
-        return _playwright_instance, _browser_instance
+    """Get or create thread-local Playwright browser instance.
+    Uses thread-local storage to avoid greenlet/thread conflicts.
+    """
+    pw = getattr(_thread_local, 'playwright', None)
+    browser = getattr(_thread_local, 'browser', None)
+    if browser and hasattr(browser, 'is_connected') and browser.is_connected():
+        return pw, browser
     try:
-        if _playwright_instance is None:
-            _playwright_instance = sync_playwright().start()
-        _browser_instance = _playwright_instance.chromium.launch(
+        if pw is None:
+            _thread_local.playwright = sync_playwright().start()
+            pw = _thread_local.playwright
+        _thread_local.browser = pw.chromium.launch(
             headless=True,
             args=[
                 "--disable-blink-features=AutomationControlled",
@@ -47,8 +51,8 @@ def _get_browser() -> tuple:
                 "--single-process",
             ],
         )
-        logger.info("Real browser launched (headless chromium)")
-        return _playwright_instance, _browser_instance
+        logger.info(f"Real browser launched (headless chromium) in thread {threading.get_ident()}")
+        return _thread_local.playwright, _thread_local.browser
     except Exception as e:
         logger.error(f"Browser launch failed: {e}")
         raise

@@ -226,12 +226,16 @@ Return a JSON object:
         results = []
         try:
             from tools.stealth_browser import check_browser_available, login_google, navigate_to_url, search_gigs, scrape_url
-        except ImportError:
-            logger.warning(f"{self.agent.name} | stealth_browser not available")
+        except ImportError as e:
+            logger.warning(f"{self.agent.name} | stealth_browser not available: {e}")
             return results
 
-        if not check_browser_available():
-            logger.warning(f"{self.agent.name} | browser not available on this host")
+        try:
+            if not check_browser_available():
+                logger.warning(f"{self.agent.name} | browser not available on this host")
+                return results
+        except Exception as e:
+            logger.warning(f"{self.agent.name} | browser check failed: {e}")
             return results
 
         email = getattr(self.agent, 'email', '')
