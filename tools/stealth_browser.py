@@ -522,7 +522,8 @@ def check_browser_available() -> bool:
     try:
         pw, browser = _get_browser()
         return browser.is_connected()
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Browser check failed: {e}")
         return False
 
 
