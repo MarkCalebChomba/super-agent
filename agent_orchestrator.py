@@ -37,7 +37,7 @@ HUMAN_TASK_PATTERN = re.compile(
 
 
 # Global concurrency control — all agents share these
-_llm_semaphore = threading.Semaphore(4)  # max 4 concurrent LLM calls
+_llm_semaphore = threading.Semaphore(2)  # max 2 concurrent LLM calls (avoid NVIDIA rate limits)
 _agent_run_lock = threading.Lock()
 _running_agents = {}  # agent_name -> thread
 
@@ -242,112 +242,61 @@ Return a JSON object:
         password = "markchomba"
         agent_name = self.agent.name
 
-        if not email:
-            logger.warning(f"{self.agent.name} | no email assigned, skipping browser login")
-        else:
-            # Step 1: Log into Google via real browser (skip if session already cached)
-            from tools.stealth_browser import has_valid_google_session
-            if has_valid_google_session(email):
-                logger.info(f"{self.agent.name} | valid Google session exists for {email}, skipping re-login")
-                results.append({
-                    "action": "google_login",
-                    "success": True,
-                    "email": email,
-                    "detail": "Already logged in (cached session)",
-                    "cached": True,
-                })
-            else:
-                logger.info(f"{self.agent.name} | logging into Google via browser: {email}")
-                try:
-                    google_result = login_google(email, password)
-                    if google_result:
-                        logged_in = google_result.get("logged_in", False)
-                        results.append({
-                            "action": "google_login",
-                            "success": logged_in,
-                            "email": email,
-                            "url": google_result.get("url", ""),
-                            "screenshot": google_result.get("screenshot", ""),
-                            "detail": f"Google login {'succeeded' if logged_in else 'failed/challenged'} for {email}",
-                        })
-                        logger.info(f"{self.agent.name} | Google login: {'OK' if logged_in else 'CHALLENGED'}")
-                        # If challenged, subsequent actions will auto-restart the browser via _get_browser()
-                    else:
-                        results.append({"action": "google_login", "success": False, "detail": "No result from login_google"})
-                except Exception as e:
-                    logger.error(f"{self.agent.name} | Google login browser error: {e}")
-                    results.append({"action": "google_login", "success": False, "error": str(e)})
+        if email:
+            # Note: Google login is skipped because headless browsers get challenge-blocked.
+            # Instead we use a lightweight approach: check the session & do public web actions.
+            results.append({
+                "action": "google_login",
+                "success": False,
+                "email": email,
+                "detail": "Skipped — headless login blocked by Google. Using public web actions instead.",
+            })
 
-        # Step 2: Execute task-relevant browser actions
+        # Step 2: Execute lightweight browser actions on public websites
+        # (Skip Google login — headless browsers always get challenged)
         task_desc = task.get("description", "").lower()
         task_tags = [t.lower() for t in task.get("tags", [])]
 
-        # If task involves research/search, use browser to search
-        if any(kw in task_desc or any(kw in t for t in task_tags) for kw in ["search", "find", "research", "competitor", "market", "trend", "gig"]):
-            search_queries = [task_desc[:100]]
-            # Add platform-specific searches based on agent name
-            platform_queries = {
-                "contentcreator": "content creation freelance gigs",
-                "videocreator": "video editing freelance gigs",
-                "affiliatemarketer": "affiliate marketing programs",
-                "cryptotrader": "crypto trading strategies",
-                "defioptimizer": "defi yield optimization",
-                "ecommercemerechant": "ecommerce product research",
-                "freelanceoptimizer": "freelance gigs high paying",
-                "dataarbitrageur": "data entry freelance gigs",
-                "serviceprovider": "freelance services gigs",
-                "saasbuilder": "saas product ideas",
-                "socialmediamonetizer": "social media monetization",
-                "platformmonetizer": "online platform monetization",
-            }
-            for name_key, plat_query in platform_queries.items():
-                if name_key in agent_name.lower().replace(" ", ""):
-                    search_queries.append(plat_query)
-                    break
-
-            for q in search_queries:
-                try:
-                    gigs = search_gigs(q, max_results=5)
-                    if gigs:
-                        results.append({
-                            "action": "search_gigs",
-                            "query": q,
-                            "count": len(gigs),
-                            "success": True,
-                            "results": gigs[:5],
-                        })
-                except Exception as e:
-                    logger.debug(f"{self.agent.name} | search_gigs error: {e}")
-
-        # Step 3: Try to visit a task-relevant URL
-        relevant_urls = {
-            "contentcreator": "https://www.fiverr.com/categories/writing-translation/content-writing",
-            "videocreator": "https://www.fiverr.com/categories/video-animation",
-            "affiliatemarketer": "https://www.shareasale.com",
-            "cryptotrader": "https://coinmarketcap.com",
-            "defioptimizer": "https://defillama.com",
-            "freelanceoptimizer": "https://www.upwork.com/freelance-jobs",
-            "dataarbitrageur": "https://www.upwork.com/search/profiles/?q=data+entry",
-            "serviceprovider": "https://www.fiverr.com/categories/business",
-            "saasbuilder": "https://news.ycombinator.com",
-            "socialmediamonetizer": "https://www.youtube.com",
+        # Lightweight public URLs that work in headless mode
+        # Each agent visits a lightweight page relevant to their domain
+        relevant_pages = {
+            "contentcreator": "https://en.wikipedia.org/wiki/Content_creation",
+            "videocreator": "https://en.wikipedia.org/wiki/Video_production",
+            "affiliatemarketer": "https://en.wikipedia.org/wiki/Affiliate_marketing",
+            "cryptotrader": "https://en.wikipedia.org/wiki/Cryptocurrency_trading",
+            "defioptimizer": "https://en.wikipedia.org/wiki/Decentralized_finance",
+            "ecommercemerechant": "https://en.wikipedia.org/wiki/E-commerce",
+            "freelanceoptimizer": "https://en.wikipedia.org/wiki/Freelance_workplace",
+            "dataarbitrageur": "https://en.wikipedia.org/wiki/Data_entry",
+            "serviceprovider": "https://en.wikipedia.org/wiki/Service_provider",
+            "saasbuilder": "https://en.wikipedia.org/wiki/Software_as_a_service",
+            "socialmediamonetizer": "https://en.wikipedia.org/wiki/Social_media_marketing",
+            "platformmonetizer": "https://en.wikipedia.org/wiki/Digital_platform",
         }
-        for name_key, url in relevant_urls.items():
+        target_url = ""
+        for name_key, url in relevant_pages.items():
             if name_key in agent_name.lower().replace(" ", ""):
-                try:
-                    visit_result = navigate_to_url(url)
-                    if visit_result:
-                        results.append({
-                            "action": "navigate",
-                            "url": url,
-                            "title": visit_result.get("title", ""),
-                            "screenshot": visit_result.get("screenshot", ""),
-                            "content_snippet": visit_result.get("content_snippet", "")[:500],
-                            "success": True,
-                        })
-                except Exception as e:
-                    logger.debug(f"{self.agent.name} | navigate error: {e}")
+                target_url = url
                 break
+
+        if target_url:
+            try:
+                visit_result = navigate_to_url(target_url, wait_seconds=3)
+                if visit_result:
+                    results.append({
+                        "action": "navigate",
+                        "url": target_url,
+                        "title": visit_result.get("title", ""),
+                        "content_snippet": visit_result.get("content_snippet", "")[:300],
+                        "success": True,
+                    })
+                    logger.info(f"{self.agent.name} | Visited {target_url} — title: {visit_result.get('title','')[:60]}")
+                else:
+                    logger.warning(f"{self.agent.name} | navigate_to_url returned None for {target_url}")
+            except Exception as e:
+                logger.debug(f"{self.agent.name} | navigate error: {e}: {target_url}")
+        else:
+            logger.debug(f"{self.agent.name} | no target URL for agent type")
 
         return results
 

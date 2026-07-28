@@ -15,6 +15,7 @@ Routing:
 import os
 import time
 import json
+import threading
 from typing import Optional, Literal
 from loguru import logger
 import requests
@@ -30,7 +31,7 @@ MODEL_TIERS = {
     },
     "balanced": {
         "openrouter": "google/gemma-4-26b-a4b-it:free",
-        "groq": "llama-3.1-8b-instant",
+        "groq": "llama-3.3-70b-versatile",
     },
     "powerful": {
         "openrouter": "openai/gpt-oss-20b:free",
@@ -70,11 +71,15 @@ def _try_hermes(prompt: str, system: str,
     )
 
 
+# Global shared rate limiter — all LLMRouter instances share this
+_nvidia_window_global = []
+_nvidia_lock = threading.Lock()
+
+
 class LLMRouter:
     """Routes LLM calls across providers with tiered fallback.
 
-    Supervisor/Critic → HF Inference (deepseek-v4-pro) → NVIDIA flash → OpenRouter
-    Worker             → NVIDIA flash → OpenRouter
+    All roles use the same reliable pipeline with shared rate limiting.
     """
 
     NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
@@ -94,19 +99,20 @@ class LLMRouter:
         self.groq_key = os.getenv("GROQ_API_KEY", "")
         self.hf_token = os.getenv("HF_TOKEN", "")
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-        self._nvidia_window = []
 
     def _rate_limit_nvidia(self):
-        """Enforce 40 requests per minute global limit for NVIDIA."""
+        """Enforce 30 requests per minute SHARED across all instances."""
+        global _nvidia_window_global
         now = time.time()
-        self._nvidia_window = [t for t in self._nvidia_window if now - t < 60]
-        if len(self._nvidia_window) >= 40:
-            sleep_time = 60 - (now - self._nvidia_window[0])
-            if sleep_time > 0:
-                logger.info(f"NVIDIA rate limit: waiting {sleep_time:.1f}s")
-                time.sleep(sleep_time)
-            self._nvidia_window = self._nvidia_window[1:]
-        self._nvidia_window.append(now)
+        with _nvidia_lock:
+            _nvidia_window_global = [t for t in _nvidia_window_global if now - t < 60]
+            if len(_nvidia_window_global) >= 30:
+                sleep_time = 60 - (now - _nvidia_window_global[0])
+                if sleep_time > 0:
+                    logger.info(f"NVIDIA shared rate limit: waiting {sleep_time:.1f}s")
+                    time.sleep(sleep_time)
+                _nvidia_window_global = _nvidia_window_global[1:]
+            _nvidia_window_global.append(now)
 
     def complete(self, prompt: str, agent_type: str = "general",
                   system: str = "You are a helpful AI assistant.",
@@ -124,20 +130,20 @@ class LLMRouter:
         if result:
             return result
 
-        # 1. NVIDIA flash (key1) — 45s timeout (API can be slow from this region)
+        # 1. NVIDIA flash (key1) — 60s timeout (API can be slow from SFO region)
         self._rate_limit_nvidia()
         result = self._try_nvidia(prompt, system, max_tokens, temperature,
-                                   model=self.NVIDIA_MODEL_FLASH, api_key=self.nvidia_key,
-                                   timeout_secs=45)
+                                    model=self.NVIDIA_MODEL_FLASH, api_key=self.nvidia_key,
+                                    timeout_secs=60)
         if result:
             return result
 
-        # 2. NVIDIA flash (key2) — spillover, 30s timeout (key2 is faster)
+        # 2. NVIDIA flash (key2) — spillover, 45s timeout
         self._rate_limit_nvidia()
         result = self._try_nvidia(prompt, system, max_tokens, temperature,
-                                   model=self.NVIDIA_MODEL_FLASH,
-                                   api_key=self.nvidia_key_2 or self.nvidia_key,
-                                   timeout_secs=30)
+                                    model=self.NVIDIA_MODEL_FLASH,
+                                    api_key=self.nvidia_key_2 or self.nvidia_key,
+                                    timeout_secs=45)
         if result:
             return result
 
