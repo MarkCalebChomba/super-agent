@@ -160,7 +160,51 @@ def index():
 
 @app.route("/agent/<name>")
 def agent_detail(name):
-    return render_template("agent_detail.html", agent_name=name, now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    store = get_store()
+    agent = store.get_agent(name)
+    if not agent:
+        agent = {"agent_name": name, "status": "unknown", "current_task": "",
+                 "income_methods": "", "error_count": 0, "total_revenue": 0.0,
+                 "class_path": "", "created_at": "", "last_active": ""}
+    build_count = get_build_count(name)
+    latest_build = get_latest_build(name)
+    build_preview = ""
+    if latest_build:
+        fp = BUILD_DIR / name / latest_build
+        if fp.exists():
+            build_preview = fp.read_text(errors="replace")[:5000]
+    recent_builds = []
+    d = BUILD_DIR / name
+    if d.exists():
+        for f in sorted(d.iterdir(), key=os.path.getmtime, reverse=True)[:10]:
+            try:
+                c = f.read_text(errors="replace")
+                recent_builds.append({"filename": f.name, "timestamp": datetime.fromtimestamp(os.path.getmtime(f)).isoformat(), "preview": c, "size": f.stat().st_size})
+            except: pass
+    logs = []
+    try:
+        db = DATA_DIR / f"{name}.db"
+        if db.exists():
+            c = sqlite3.connect(str(db))
+            c.row_factory = sqlite3.Row
+            logs = [dict(r) for r in c.execute("SELECT * FROM logs ORDER BY id DESC LIMIT 100").fetchall()]
+            c.close()
+    except: pass
+    resource_usage = {"avg_mem": 0, "tok": 0, "api": 0}
+    inbox = []
+    mail_count = 0
+    try:
+        inbox = store.get_agent_mail(name)
+        mail_count = sum(1 for m in inbox if not m.get("read"))
+    except: pass
+    try: plans = store.get_agent_plans(name, 20)
+    except: plans = []
+    return render_template("agent_detail.html", agent=agent, build_count=build_count,
+                           latest_build=latest_build, build_preview=build_preview,
+                           recent_builds=recent_builds, logs=logs,
+                           resource_usage=resource_usage, inbox=inbox,
+                           mail_count=mail_count, plans=plans,
+                           now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
 @app.route("/analysis")
 def analysis_page():
