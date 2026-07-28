@@ -227,10 +227,9 @@ class LLMRouter:
             return None
         mdl = model or "deepseek-ai/DeepSeek-V4-Flash"
         try:
-            logger.info(f"HF Inference: calling {mdl} via direct POST")
-            # Direct POST to HF Inference API (more reliable than OpenAI wrapper)
+            logger.info(f"HF Inference: calling {mdl} via router")
             resp = requests.post(
-                f"https://api-inference.huggingface.co/models/{mdl}/v1/chat/completions",
+                "https://router.huggingface.co/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {self.hf_token}",
                     "Content-Type": "application/json",
