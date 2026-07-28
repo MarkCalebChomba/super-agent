@@ -129,47 +129,15 @@ class LLMRouter:
         if result:
             return result
 
-        # 1. NVIDIA DeepSeek V4 Flash (236B) — key1, 60s timeout
-        self._rate_limit_nvidia()
-        result = self._try_nvidia(prompt, system, max_tokens, temperature,
-                                    model=self.NVIDIA_MODEL_FLASH, api_key=self.nvidia_key,
-                                    timeout_secs=60)
-        if result:
-            return result
+        # 1. HF Inference — try multiple >200B models
+        for hf_model in ["deepseek-ai/DeepSeek-V4-Flash", "deepseek-ai/DeepSeek-R1",
+                         "deepseek-ai/DeepSeek-V3"]:
+            result = self._try_hf_inference(prompt, system, max_tokens, temperature,
+                                              model=hf_model)
+            if result:
+                return result
 
-        # 2. NVIDIA DeepSeek V4 Pro (1T) — key1, 120s timeout (cold start)
-        self._rate_limit_nvidia()
-        result = self._try_nvidia(prompt, system, max_tokens, temperature,
-                                    model=self.NVIDIA_MODEL_PRO, api_key=self.nvidia_key,
-                                    timeout_secs=120)
-        if result:
-            return result
-
-        # 3. NVIDIA DeepSeek V4 Flash (236B) — key2, 60s timeout
-        self._rate_limit_nvidia()
-        result = self._try_nvidia(prompt, system, max_tokens, temperature,
-                                    model=self.NVIDIA_MODEL_FLASH,
-                                    api_key=self.nvidia_key_2 or self.nvidia_key,
-                                    timeout_secs=60)
-        if result:
-            return result
-
-        # 4. NVIDIA DeepSeek V4 Pro (1T) — key2, 120s timeout
-        self._rate_limit_nvidia()
-        result = self._try_nvidia(prompt, system, max_tokens, temperature,
-                                    model=self.NVIDIA_MODEL_PRO,
-                                    api_key=self.nvidia_key_2 or self.nvidia_key,
-                                    timeout_secs=120)
-        if result:
-            return result
-
-        # 5. HF Inference DeepSeek V4 Flash (236B)
-        result = self._try_hf_inference(prompt, system, max_tokens, temperature,
-                                          model="deepseek-ai/DeepSeek-V4-Flash")
-        if result:
-            return result
-
-        # 6. OpenRouter — try multiple >200B models in order
+        # 2. OpenRouter — try multiple >200B free models
         models = MODEL_TIERS.get(tier, MODEL_TIERS["balanced"])
         openrouter_models = [
             models["openrouter"],           # deepseek/deepseek-r1:free (671B)
@@ -184,7 +152,23 @@ class LLMRouter:
             if result:
                 return result
 
-        # No Groq/Ollama fallback — no models >200B available on those providers
+        # 3. NVIDIA (last resort — constantly rate limited from SFO)
+        # Try Flash (236B) then Pro (1T) with each key, fail fast on rate limits
+        for key_attr, label in [("nvidia_key", "key1"), ("nvidia_key_2", "key2")]:
+            key = getattr(self, key_attr, None)
+            if not key:
+                continue
+            for model_attr, mdl_label, timeout in [
+                (self.NVIDIA_MODEL_FLASH, "Flash", 30),
+                (self.NVIDIA_MODEL_PRO, "Pro", 60),
+            ]:
+                self._rate_limit_nvidia()
+                result = self._try_nvidia(prompt, system, max_tokens, temperature,
+                                            model=model_attr, api_key=key,
+                                            timeout_secs=timeout)
+                if result:
+                    return result
+
         return None
 
     def _try_nvidia(self, prompt: str, system: str,
@@ -222,8 +206,7 @@ class LLMRouter:
             err_str = str(e)
             logger.debug(f"NVIDIA {mdl} failed: {err_str[:120]}")
             if "503" in err_str or "ResourceExhausted" in err_str or "429" in err_str:
-                logger.info(f"NVIDIA {mdl} rate limited, backing off 15s")
-                time.sleep(15)
+                logger.info(f"NVIDIA {mdl} exhausted/rate limited, skip to next provider")
         return None
 
     def _try_hf_inference(self, prompt: str, system: str,
