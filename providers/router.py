@@ -27,16 +27,16 @@ ModelTier = Literal["cheap", "balanced", "powerful"]
 # All models must be >200B parameters. No small models.
 MODEL_TIERS = {
     "cheap": {
-        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",          # 1T params
-        "openrouter": "meta-llama/llama-3.1-405b-instruct:free",  # 405B
+        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",        # 1T params (NVIDIA)
+        "openrouter": "deepseek/deepseek-r1:free",          # 671B (OpenRouter)
     },
     "balanced": {
-        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",          # 1T params
-        "openrouter": "meta-llama/llama-3.1-405b-instruct:free",  # 405B
+        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",        # 1T
+        "openrouter": "deepseek/deepseek-r1:free",          # 671B
     },
     "powerful": {
-        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",          # 1T params
-        "openrouter": "meta-llama/llama-3.1-405b-instruct:free",  # 405B
+        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",        # 1T
+        "openrouter": "deepseek/deepseek-r1:free",          # 671B
     },
 }
 
@@ -135,29 +135,29 @@ class LLMRouter:
         if result:
             return result
 
-        # 2. NVIDIA DeepSeek V4 Pro (1T) — key1, 90s timeout (cold start)
+        # 2. NVIDIA DeepSeek V4 Pro (1T) — key1, 120s timeout (cold start)
         self._rate_limit_nvidia()
         result = self._try_nvidia(prompt, system, max_tokens, temperature,
                                     model=self.NVIDIA_MODEL_PRO, api_key=self.nvidia_key,
-                                    timeout_secs=90)
+                                    timeout_secs=120)
         if result:
             return result
 
-        # 3. NVIDIA DeepSeek V4 Flash (236B) — key2, 45s timeout
+        # 3. NVIDIA DeepSeek V4 Flash (236B) — key2, 60s timeout
         self._rate_limit_nvidia()
         result = self._try_nvidia(prompt, system, max_tokens, temperature,
                                     model=self.NVIDIA_MODEL_FLASH,
                                     api_key=self.nvidia_key_2 or self.nvidia_key,
-                                    timeout_secs=45)
+                                    timeout_secs=60)
         if result:
             return result
 
-        # 4. NVIDIA DeepSeek V4 Pro (1T) — key2, 90s timeout
+        # 4. NVIDIA DeepSeek V4 Pro (1T) — key2, 120s timeout
         self._rate_limit_nvidia()
         result = self._try_nvidia(prompt, system, max_tokens, temperature,
                                     model=self.NVIDIA_MODEL_PRO,
                                     api_key=self.nvidia_key_2 or self.nvidia_key,
-                                    timeout_secs=90)
+                                    timeout_secs=120)
         if result:
             return result
 
@@ -223,38 +223,43 @@ class LLMRouter:
     def _try_hf_inference(self, prompt: str, system: str,
                           max_tokens: int, temperature: float,
                           model: str = None) -> Optional[str]:
-        """Call DeepSeek via Hugging Face Inference API (OpenAI-compatible).
+        """Call DeepSeek via Hugging Face Inference API (direct REST, not OpenAI wrapper).
 
-        Timeout set to 120s max total. If HF Inference is slow (cold start),
-        it will fail fast and the caller falls through to the next provider.
+        Uses the serverless Inference API at huggingface.co/models/{model}/v1/chat.
         """
         if not self.hf_token:
             return None
         mdl = model or "deepseek-ai/DeepSeek-V4-Flash"
         try:
-            http_client = httpx.Client(timeout=httpx.Timeout(15, connect=5))
-            client = OpenAI(
-                base_url=self.HF_INFERENCE_BASE,
-                api_key=self.hf_token,
-                http_client=http_client,
-                max_retries=0,
+            logger.info(f"HF Inference: calling {mdl} via direct POST")
+            # Direct POST to HF Inference API (more reliable than OpenAI wrapper)
+            resp = requests.post(
+                f"https://api-inference.huggingface.co/models/{mdl}/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.hf_token}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": mdl,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "max_tokens": min(max_tokens, 16384),
+                    "temperature": temperature,
+                    "top_p": 0.95,
+                },
+                timeout=60,
             )
-            completion = client.chat.completions.create(
-                model=mdl,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=temperature,
-                top_p=0.95,
-                max_tokens=min(max_tokens, 16384),
-                stream=False,
-            )
-            content = completion.choices[0].message.content
-            if content:
-                return content
+            if resp.status_code == 200:
+                data = resp.json()
+                content = data["choices"][0]["message"]["content"]
+                if content:
+                    logger.info(f"HF Inference SUCCESS: got {len(content)} chars")
+                    return content
+            logger.info(f"HF Inference ({mdl}) status={resp.status_code}: {resp.text[:200]}")
         except Exception as e:
-            logger.debug(f"HF Inference ({mdl}) failed: {str(e)[:120]}")
+            logger.info(f"HF Inference ({mdl}) failed: {str(e)[:200]}")
         return None
 
     def _try_openrouter(self, prompt: str, system: str,
