@@ -639,6 +639,19 @@ def _init_startup():
     _startup_done = True
     # Seed agents from instructions/ directory
     seed_agents()
+    # Start all agent threads so they actually run, not just sit registered
+    try:
+        store = get_store()
+        agents = store.get_all_agents()
+        for a in agents:
+            name = a["agent_name"]
+            if name not in _agent_threads or not _agent_threads[name].is_alive():
+                logger.info(f"Auto-starting agent: {name}")
+                result = start_agent_thread(name)
+                if not result.get("success"):
+                    logger.warning(f"Failed to auto-start {name}: {result.get('error', 'unknown')}")
+    except Exception as e:
+        logger.error(f"auto-start agents failed: {e}")
     # Restore persistent data from Hugging Face Hub (if configured)
     try:
         from storage.hf_sync import pull_all, push_all
