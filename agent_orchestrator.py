@@ -241,25 +241,36 @@ Return a JSON object:
         if not email:
             logger.warning(f"{self.agent.name} | no email assigned, skipping browser login")
         else:
-            # Step 1: Always log into Google as proof of real action
-            logger.info(f"{self.agent.name} | logging into Google via browser: {email}")
-            try:
-                google_result = login_google(email, password)
-                if google_result:
-                    results.append({
-                        "action": "google_login",
-                        "success": google_result.get("logged_in", False),
-                        "email": email,
-                        "url": google_result.get("url", ""),
-                        "screenshot": google_result.get("screenshot", ""),
-                        "detail": f"Google login {'succeeded' if google_result.get('logged_in') else 'failed/challenged'} for {email}",
-                    })
-                    logger.info(f"{self.agent.name} | Google login: {'OK' if google_result.get('logged_in') else 'CHALLENGED'}")
-                else:
-                    results.append({"action": "google_login", "success": False, "detail": "No result from login_google"})
-            except Exception as e:
-                logger.error(f"{self.agent.name} | Google login browser error: {e}")
-                results.append({"action": "google_login", "success": False, "error": str(e)})
+            # Step 1: Log into Google via real browser (skip if session already cached)
+            from tools.stealth_browser import has_valid_google_session
+            if has_valid_google_session(email):
+                logger.info(f"{self.agent.name} | valid Google session exists for {email}, skipping re-login")
+                results.append({
+                    "action": "google_login",
+                    "success": True,
+                    "email": email,
+                    "detail": "Already logged in (cached session)",
+                    "cached": True,
+                })
+            else:
+                logger.info(f"{self.agent.name} | logging into Google via browser: {email}")
+                try:
+                    google_result = login_google(email, password)
+                    if google_result:
+                        results.append({
+                            "action": "google_login",
+                            "success": google_result.get("logged_in", False),
+                            "email": email,
+                            "url": google_result.get("url", ""),
+                            "screenshot": google_result.get("screenshot", ""),
+                            "detail": f"Google login {'succeeded' if google_result.get('logged_in') else 'failed/challenged'} for {email}",
+                        })
+                        logger.info(f"{self.agent.name} | Google login: {'OK' if google_result.get('logged_in') else 'CHALLENGED'}")
+                    else:
+                        results.append({"action": "google_login", "success": False, "detail": "No result from login_google"})
+                except Exception as e:
+                    logger.error(f"{self.agent.name} | Google login browser error: {e}")
+                    results.append({"action": "google_login", "success": False, "error": str(e)})
 
         # Step 2: Execute task-relevant browser actions
         task_desc = task.get("description", "").lower()

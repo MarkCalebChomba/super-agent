@@ -496,6 +496,23 @@ class StealthBrowser:
             return None
 
 
+def has_valid_google_session(email: str) -> bool:
+    """Check if we have saved cookies for a Google account (avoids re-login every cycle)."""
+    cookie_file = COOKIES_DIR / f"google_{email.split('@')[0]}_cookies.json"
+    if not cookie_file.exists():
+        return False
+    try:
+        cookies = json.loads(cookie_file.read_text())
+        if not cookies:
+            return False
+        # Check if cookies are expired
+        now = time.time()
+        valid = [c for c in cookies if c.get("expires", now + 3600) > now]
+        return len(valid) > 0
+    except Exception:
+        return False
+
+
 def check_browser_available() -> bool:
     """Verify Playwright + chromium are installed and working."""
     try:
