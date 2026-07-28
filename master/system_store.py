@@ -135,13 +135,14 @@ class SystemStore:
             );
             CREATE INDEX IF NOT EXISTS idx_chat_agent ON agent_chat_history(agent_name);
         """)
+        for col in ["current_task", "paused"]:
+            try:
+                self._conn.execute(f"ALTER TABLE agent_registry ADD COLUMN {col} TEXT DEFAULT ''")
+                self._conn.commit()
+            except Exception:
+                pass
         try:
-            self._conn.execute("ALTER TABLE agent_registry ADD COLUMN current_task TEXT DEFAULT ''")
-            self._conn.commit()
-        except Exception:
-            pass
-        try:
-            self._conn.execute("ALTER TABLE agent_registry ADD COLUMN paused INTEGER DEFAULT 0")
+            self._conn.execute("ALTER TABLE agent_chat_history ADD COLUMN role TEXT DEFAULT 'worker'")
             self._conn.commit()
         except Exception:
             pass
@@ -466,18 +467,25 @@ class SystemStore:
     def log_chat_interaction(self, agent_name: str, input_prompt: str,
                               output_response: str = None, execution_mode: str = "hermes",
                               success: bool = False, error_message: str = None,
-                              tokens_used: int = 0, duration_ms: int = 0):
+                              tokens_used: int = 0, duration_ms: int = 0,
+                              role: str = "worker"):
         self._conn.execute(
-            "INSERT INTO agent_chat_history (agent_name, input_prompt, output_response, execution_mode, success, error_message, tokens_used, duration_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (agent_name, input_prompt, output_response, execution_mode, 1 if success else 0, error_message, tokens_used, duration_ms)
+            "INSERT INTO agent_chat_history (agent_name, input_prompt, output_response, execution_mode, success, error_message, tokens_used, duration_ms, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (agent_name, input_prompt, output_response, execution_mode, 1 if success else 0, error_message, tokens_used, duration_ms, role)
         )
         self._conn.commit()
 
-    def get_chat_history(self, agent_name: str, limit: int = 50) -> list[dict]:
-        cur = self._conn.execute(
-            "SELECT * FROM agent_chat_history WHERE agent_name = ? ORDER BY created_at DESC LIMIT ?",
-            (agent_name, limit)
-        )
+    def get_chat_history(self, agent_name: str, limit: int = 50, role: str = None) -> list[dict]:
+        if role:
+            cur = self._conn.execute(
+                "SELECT * FROM agent_chat_history WHERE agent_name = ? AND role = ? ORDER BY created_at DESC LIMIT ?",
+                (agent_name, role, limit)
+            )
+        else:
+            cur = self._conn.execute(
+                "SELECT * FROM agent_chat_history WHERE agent_name = ? ORDER BY created_at DESC LIMIT ?",
+                (agent_name, limit)
+            )
         return [dict(r) for r in cur.fetchall()]
 
     def get_all_chat_recent(self, limit: int = 20) -> list[dict]:

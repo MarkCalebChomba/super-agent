@@ -25,3 +25,9 @@ data/cookies/
 super-agent-repo/
 *.pid
 agent_output.log
+node_modules/
+nul
+non_ascii_report.txt
+dashboard_stdout.log
+dashboard.pid
+tunnel_result.txt

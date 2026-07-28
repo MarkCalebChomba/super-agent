@@ -48,6 +48,15 @@ class AgentMemory:
     def save_all(self):
         self._save_json(self.memories_file, self.experiences)
         self._save_json(self.task_file, self.task_queue)
+        self._sync_hf()
+
+    def _sync_hf(self):
+        try:
+            from storage.hf_sync import push_file
+            push_file(str(self.memories_file))
+            push_file(str(self.task_file))
+        except Exception:
+            pass
 
     # ── Long-term memory ───────────────────────────────────────────
 

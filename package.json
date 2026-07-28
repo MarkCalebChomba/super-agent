@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "firecrawl-cli": "^1.19.27"
+  }
+}

@@ -21,10 +21,24 @@ Workflow:
   7. If failed -> task marked impossible, Supervisor logs lesson
 """
 import json
+import re
 import time
+import threading
 from typing import Optional
 from datetime import datetime
 from loguru import logger
+from resource_bank import ResourceBank
+from finance_layer import FinanceLayer, create_human_task, get_pending_tasks
+HUMAN_TASK_PATTERN = re.compile(
+    r'HUMAN_TASK:\s*(?P<title>[^|]+)\s*\|\s*(?P<url>[^|]+)\s*\|\s*(?P<instructions>.+)',
+    re.IGNORECASE,
+)
+
+
+# Global concurrency control — all agents share these
+_llm_semaphore = threading.Semaphore(4)  # max 4 concurrent LLM calls
+_agent_run_lock = threading.Lock()
+_running_agents = {}  # agent_name -> thread
 
 
 CRITIC_RUBRIC = """## Value Assessment Protocol
@@ -65,6 +79,16 @@ class AgentOrchestrator:
         self.frustration_threshold = frustration_threshold
         self.north_star = ""
         self.revision_count = 0
+        self.resource_bank = ResourceBank(agent.name)
+        self.finance = FinanceLayer(agent.name)
+        self._model_unavailable = False
+
+    def _get_wallet_report(self) -> str:
+        try:
+            from wallet import get_wallet
+            return get_wallet(self.agent.name).get_wallet_report()
+        except Exception:
+            return ""
 
     # ── North Star ─────────────────────────────────────────────────
 
@@ -81,23 +105,51 @@ class AgentOrchestrator:
 
     def supervisor_plan(self) -> list[dict]:
         """Break goal into actionable sub-tasks."""
+        if self._model_unavailable:
+            logger.warning(f"{self.agent.name} | model unavailable, skip plan")
+            return [self._fallback_task("Model unavailable — waiting for retry")]
+
         self.load_north_star()
 
         pending = self.memory.pending_tasks()
         if pending:
             return pending
 
+        resource_report = self.resource_bank.get_status_report()
+        finance_report = self.finance.get_finance_report()
+        wallet_report = self._get_wallet_report()
+
         prompt = f"""You are the SUPERVISOR. Your mission:
 
 {self.north_star}
+
+{resource_report}
+
+{finance_report}
+
+{wallet_report}
 
 Decompose this mission into 3-5 concrete sub-tasks. Each sub-task must:
 
 1. Be specific and actionable by a Worker agent
 2. Have a clear "done" criterion
 3. Produce a tangible output (research, analysis, plan, asset)
-4. For scripts/code: instruct the worker to FIND existing solutions on GitHub, YouTube, TikTok, or marketplaces rather than writing from scratch. The worker should personalise and monetise what already works.
-5. For content: instruct to find high-performing examples and adapt them.
+4. DO NOT generate anything from scratch. Your job is to:
+   - Find what already works (competitors, top sellers, trending content)
+   - COPY IT HEAVILY — rip the structure, format, and angle
+   - Personalise it just enough to avoid plagiarism
+   - Adapt for your specific audience/niche
+5. For content: find top-performing examples, steal their hook, rewrite in your voice
+6. For code: find working GitHub repos, fork and modify
+7. For business: find successful competitors, clone their model
+8. BE REALISTIC about the agent's resources. If it has no browser, no accounts, no API keys beyond LLM access, plan tasks that can be done with LLM + web search only.
+9. If the agent HAS a real browser, plan tasks that involve visiting real websites:
+   - Scraping competitor pricing and offerings
+   - Finding real freelance gigs to underbid
+   - Extracting real data from marketplaces
+
+CRITICAL: You have ${self.resource_bank.balance:.2f}. All tasks must cost $0 to execute.
+Priority is REVENUE — pick the task with the shortest path to money.
 
 Return ONLY a JSON array of objects:
   {{"id":"task_unique_name","description":"what to do","success_criteria":"how to verify","tags":["tag1","tag2"],"constraints":"any specific constraints"}}
@@ -105,7 +157,7 @@ Return ONLY a JSON array of objects:
 Example:
 [{{"id":"research_market","description":"Research top-performing affiliate programs for crypto trading","success_criteria":"List of 5 programs with commission rates and requirements","tags":["research","affiliate"],"constraints":"Focus on programs that pay in crypto"}}]
 """
-        output = self._call_llm(prompt)
+        output = self._call_llm(prompt, role="supervisor")
         if output:
             try:
                 tasks = json.loads(output)
@@ -136,22 +188,27 @@ Example:
         feedback = critique.get("feedback", "Improve the output.")
         weaknesses = critique.get("weaknesses", [])
         w_list = "\n".join(f"- {w}" for w in weaknesses)
+        resource_report = self.resource_bank.get_status_report()
+        finance_report = self.finance.get_finance_report()
 
         prompt = f"""You are the SUPERVISOR reviewing a Worker's failed submission.
 
 Mission: {self.north_star}
 Task: {task['description']}
+{resource_report}
+{finance_report}
 Critique feedback: {feedback}
 Weaknesses identified:
 {w_list}
 
 Generate 2-3 specific, actionable revision instructions for the Worker.
 Focus on what to CHANGE, not just what's wrong.
-Consider how existing solutions (GitHub, YouTube, tutorials) could be adapted.
+Consider the agent's actual resources — if it has no browser/accounts,
+focus on what CAN be done with LLM + search only.
 Return a JSON object:
   {{"revision_instructions":["instruction 1","instruction 2","instruction 3"],"priority":"what to focus on first"}}
 """
-        result = self._call_llm(prompt)
+        result = self._call_llm(prompt, role="supervisor")
         if result:
             try:
                 return json.loads(result).get("revision_instructions", [result])
@@ -163,9 +220,24 @@ Return a JSON object:
 
     def worker_execute(self, task: dict, revision_hint: str = "") -> dict:
         """Worker executes a sub-task and submits output."""
+        if self._model_unavailable:
+            return {"output": None, "success": False, "error": "Model unavailable after retries"}
+
         relevant = self.memory.query_memory(task.get("description", ""), limit=3)
         revision = self.memory.working.get("current_revision", 0)
         tried = self.memory.tried_approaches_for(task["id"])
+
+        # Fetch real web search results for the task
+        search_results = []
+        try:
+            from tools.web_search import web_search
+            search_results = web_search(task["description"], max_results=5)
+        except Exception:
+            pass
+
+        resource_report = self.resource_bank.get_status_report()
+        finance_report = self.finance.get_finance_report()
+        wallet_report = self._get_wallet_report()
 
         parts = [f"## MISSION (North Star)\n{self.north_star}"]
         parts.append(f"## YOUR ROLE\nYou are a Worker agent executing a specific task.")
@@ -180,7 +252,7 @@ Return a JSON object:
 
         if relevant:
             mem = "\n".join(
-                f"{'✓' if e['success'] else '✗'} {e['action'][:120]}"
+                f"{'[OK]' if e['success'] else '[FAIL]'} {e['action'][:120]}"
                 for e in relevant
             )
             parts.append(f"## PAST EXPERIENCES\n{mem}")
@@ -192,24 +264,49 @@ Return a JSON object:
         if revision > 0:
             parts.append(f"\nThis is revision {revision}. Make sure your output addresses ALL previous feedback.")
 
+        parts.append(resource_report)
+        parts.append(finance_report)
+        parts.append(wallet_report)
+
+        if search_results:
+            search_block = "\n".join(
+                f"- {r['title']}: {r['url']}" for r in search_results[:5]
+            )
+            parts.append(f"## REAL SEARCH RESULTS (use these instead of guessing)\n{search_block}")
+
         parts.append("""## OUTPUT REQUIREMENTS
 1. Provide concrete output — not just plans or ideas
-2. If relevant: cite existing solutions, sources, or market data
-3. End with SUBMISSION: followed by a brief summary of what you produced
+2. HEAVILY COPY competitors. Find what works, rip the structure, personalise the voice.
+3. Cite REAL sources from the search results above. DO NOT make up URLs.
+4. If no search results are available, provide search queries the user can use
+5. If you need a HUMAN to do something (sign up for a platform, solve a captcha, etc.),
+   include this EXACT line in your output:
+   HUMAN_TASK: What needs doing | https://signup-url.com | Instructions for the human
+6. End with SUBMISSION: followed by a brief summary of what you produced
 
 ## OUTPUT
 """)
 
         prompt = "\n\n".join(parts)
-        result_text = self._call_llm(prompt)
+        result_text = self._call_llm(prompt, role="worker")
         if result_text:
-            return {"output": result_text, "success": True}
+            result = {"output": result_text, "success": True}
+            m = HUMAN_TASK_PATTERN.search(result_text)
+            if m:
+                result["human_task"] = {
+                    "title": m.group("title").strip(),
+                    "url": m.group("url").strip(),
+                    "instructions": m.group("instructions").strip(),
+                }
+            return result
         return {"output": None, "success": False, "error": "Worker returned no output"}
 
     # ── CRITIC: Evaluate ───────────────────────────────────────────
 
     def critic_evaluate(self, task: dict, output: str) -> dict:
         """Critic evaluates Worker output against rubric."""
+        resource_report = self.resource_bank.get_status_report()
+        finance_report = self.finance.get_finance_report()
         prompt = f"""You are the CRITIC. Your job is to evaluate the Worker's output against a strict rubric.
 
 ## Mission
@@ -221,15 +318,28 @@ Return a JSON object:
 ## Success Criteria
 {task['success_criteria']}
 
+## Agent Resource Context
+{resource_report}
+
+## Finance Context
+{finance_report}
+
 ## Worker Output
-{output[:4000]}
+{output[:8000]}
 
 {CRITIC_RUBRIC}
 """
-        result = self._call_llm(prompt)
+        result = self._call_llm(prompt, role="critic")
         if result:
+            # Strip markdown code fences that LLMs often wrap JSON in
+            cleaned = result.strip()
+            if cleaned.startswith("```"):
+                # Remove ```json ... ``` or ``` ... ``` fences
+                cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+                cleaned = re.sub(r'\s*```$', '', cleaned)
+                cleaned = cleaned.strip()
             try:
-                critique = json.loads(result)
+                critique = json.loads(cleaned)
                 critique.setdefault("verdict", "needs_revision")
                 critique.setdefault("score", 5)
                 critique.setdefault("weaknesses", [])
@@ -250,7 +360,20 @@ Return a JSON object:
 
     # ── Main workflow loop ─────────────────────────────────────────
 
+    def _fallback_task(self, reason: str) -> dict:
+        return {
+            "id": "wait_and_retry",
+            "description": f"System paused: {reason}",
+            "success_criteria": "Model becomes available again",
+            "tags": ["system"],
+            "status": "pending", "attempts": 0, "revisions": 0,
+        }
+
     def get_next_task(self) -> Optional[dict]:
+        if self._model_unavailable:
+            logger.warning(f"{self.agent.name} | model unavailable, returning wait task")
+            return self._fallback_task("LLM unavailable after retries")
+
         task = self.memory.get_next_task()
         if task:
             return task
@@ -261,9 +384,25 @@ Return a JSON object:
         """One full Supervisor -> Worker -> Critic workflow cycle."""
         self.load_north_star()
 
+        # Periodically retry the model if it was previously unavailable
+        if self._model_unavailable:
+            if time.time() - getattr(self, '_model_failed_at', 0) > 120:
+                logger.info(f"{self.agent.name} | retrying model after 120s cooldown")
+                self._model_unavailable = False
+            else:
+                self.resource_bank.record_expense(0.0, "cycle skipped — model unavailable",
+                                                   category="system")
+                return {"output": None, "success": False, "idle": True,
+                        "error": "Model unavailable"}
+
         task = self.get_next_task()
         if not task:
             return {"output": None, "success": False, "idle": True}
+
+        # Record cycle cost in resource bank
+        self.resource_bank.record_expense(0.001, f"cycle start: {task['id']}",
+                                           category="compute")
+        self.finance.add_expense(0.001, f"cycle: {task['id']}", "compute")
 
         self.memory.working["current_task"] = task
         self.revision_count = 0
@@ -298,6 +437,16 @@ Return a JSON object:
                 )
                 self.memory.update_task(task["id"], {"status": "completed"})
                 self.memory.reset_frustration()
+                # Create human tasks only after Critic approves output
+                ht = result.get("human_task")
+                if ht:
+                    create_human_task(
+                        agent=self.agent.name,
+                        title=ht["title"],
+                        url=ht["url"],
+                        instructions=ht["instructions"],
+                        email=getattr(self.agent, 'email', ''),
+                    )
                 result["critique"] = critique
                 result["verdict"] = "completed"
                 return result
@@ -339,6 +488,11 @@ Return a JSON object:
         )
         self.memory.update_task(task["id"], {"status": "impossible"})
         self.memory.reset_frustration()
+        self.resource_bank.record_expense(
+            0.0, f"task failed: {task['id']} ({self.revision_count} revisions)",
+            category="failed_task"
+        )
+        self.finance.add_expense(0.0, f"task failed: {task['id']}", "failed")
 
         return {
             "output": result.get("output"),
@@ -348,5 +502,47 @@ Return a JSON object:
             "revisions": self.revision_count,
         }
 
-    def _call_llm(self, prompt: str) -> Optional[str]:
-        return self.agent._execute_via_hermes(prompt).get("output")
+    # ── LLM call with retries ──────────────────────────────────────
+
+    def _call_llm(self, prompt: str, role: str = "worker",
+                  max_retries: int = 2) -> Optional[str]:
+        """Call LLM with retry loop. Uses global semaphore for concurrency.
+
+        Each failed attempt increments cost in ResourceBank.
+        After max_retries, sets _model_unavailable flag so the cycle can abort.
+        """
+        acquired = _llm_semaphore.acquire(timeout=120)
+        if not acquired:
+            logger.warning(f"{self.agent.name} | semaphore timeout (120s), retrying...")
+            _llm_semaphore.acquire(timeout=300)
+
+        try:
+            for attempt in range(1, max_retries + 1):
+                result = self.agent._execute_via_hermes(prompt, role=role)
+                output = result.get("output")
+
+                if output:
+                    self._model_unavailable = False
+                    self._model_failed_at = 0
+                    est_cost = self.resource_bank.cost_estimate(
+                        "hf" if role in ("supervisor", "critic") else "nvidia",
+                        tokens=len(prompt.split()) + len(output.split()),
+                    )
+                    self.resource_bank.record_expense(est_cost, f"LLM call ({role})",
+                                                       category="llm")
+                    return output
+
+                error = result.get("error", "No output")
+                logger.warning(f"{self.agent.name} | {role} attempt {attempt}/{max_retries} failed: {error}")
+
+                if attempt < max_retries:
+                    backoff = attempt  # 1s, 2s
+                    logger.info(f"{self.agent.name} | retrying {role} in {backoff}s...")
+                    time.sleep(backoff)
+
+            self._model_unavailable = True
+            self._model_failed_at = time.time()
+            logger.error(f"{self.agent.name} | {role} failed after {max_retries} retries")
+            return None
+        finally:
+            _llm_semaphore.release()

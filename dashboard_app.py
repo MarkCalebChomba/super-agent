@@ -162,6 +162,10 @@ def index():
 def agent_detail(name):
     return render_template("agent_detail.html", agent_name=name, now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
 
+@app.route("/analysis")
+def analysis_page():
+    return render_template("analysis.html", now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
 @app.route("/build/<name>/<path:filename>")
 def view_build(name, filename):
     fp = BUILD_DIR / name / filename
@@ -186,19 +190,129 @@ def api_agent_restart(name):
     time.sleep(0.5)
     return jsonify(start_agent_thread(name))
 
+@app.route("/api/agents/start-all", methods=["POST"])
+def api_agents_start_all():
+    store = get_store()
+    agents = store.get_all_agents()
+    results = {}
+    for a in agents:
+        name = a["agent_name"]
+        if name not in _agent_threads or not _agent_threads[name].is_alive():
+            results[name] = start_agent_thread(name)
+        else:
+            results[name] = {"success": False, "error": "already running"}
+    return jsonify(results)
+
+@app.route("/api/agents/stop-all", methods=["POST"])
+def api_agents_stop_all():
+    store = get_store()
+    agents = store.get_all_agents()
+    results = {}
+    for a in agents:
+        name = a["agent_name"]
+        results[name] = stop_agent_thread(name)
+    return jsonify(results)
+
 # ── Agent Data API ────────────────────────────────────────────────
 
 @app.route("/api/agent/<name>/chat")
 def api_agent_chat(name):
     limit = request.args.get("limit", 50, type=int)
+    role = request.args.get("role") or None
     store = get_store()
-    return jsonify(store.get_chat_history(name, limit))
+    return jsonify(store.get_chat_history(name, limit, role=role))
 
 @app.route("/api/agent/<name>/instructions")
 def api_agent_instructions(name):
     inst = get_inst(name)
     if not inst: return jsonify({"error": "not found"}), 404
     return jsonify(inst)
+
+@app.route("/api/agent/<name>/resources")
+def api_agent_resources(name):
+    try:
+        from resource_bank import ResourceBank
+        bank = ResourceBank(name)
+        return jsonify({
+            "balance": bank.balance,
+            "total_revenue": bank.total_revenue,
+            "total_costs": bank.total_costs,
+            "capabilities": {k: v.get("available") for k, v in bank.capabilities.items()},
+            "accounts": {k: v.get("status") for k, v in bank.accounts.items()},
+            "tools": {k: v.get("available") for k, v in bank.tools.items()},
+            "income_log": bank.income_log[-10:],
+            "expense_log": bank.expense_log[-10:],
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/finance")
+def api_finance():
+    try:
+        from finance_layer import get_all_finance_summary
+        return jsonify(get_all_finance_summary())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/finance/<name>")
+def api_finance_agent(name):
+    try:
+        from finance_layer import FinanceLayer, get_pending_tasks, get_all_tasks
+        fl = FinanceLayer(name)
+        return jsonify({
+            "balance": fl.balance,
+            "total_earned": fl.total_earned,
+            "total_spent": fl.total_spent,
+            "accounts": fl.accounts,
+            "transactions": fl.transactions[-20:],
+            "pending_tasks": get_pending_tasks(name),
+            "all_tasks": get_all_tasks(name, limit=10),
+            "finance_report": fl.get_finance_report(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/human-tasks")
+def api_human_tasks():
+    try:
+        from finance_layer import get_pending_tasks, get_all_tasks
+        agent = request.args.get("agent", "")
+        return jsonify({
+            "pending": get_pending_tasks(agent) if not agent else get_pending_tasks(),
+            "recent": get_all_tasks(agent, limit=20),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/human-tasks/<task_id>/complete", methods=["POST"])
+def api_complete_task(task_id):
+    from finance_layer import complete_human_task
+    ok = complete_human_task(task_id)
+    if ok:
+        return jsonify({"success": True})
+    return jsonify({"error": "task not found"}), 404
+
+@app.route("/api/wallet")
+def api_wallet():
+    try:
+        from wallet import get_all_wallet_summary
+        return jsonify(get_all_wallet_summary())
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/wallet/<name>")
+def api_wallet_agent(name):
+    try:
+        from wallet import Wallet
+        w = Wallet(name)
+        return jsonify({
+            "credits": w.credits,
+            "crypto_address": w.crypto_address,
+            "credit_history": w.credit_history[-20:],
+            "report": w.get_wallet_report(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 @app.route("/api/agent/<name>/memory")
 def api_agent_memory(name):
@@ -210,6 +324,126 @@ def api_agent_memory(name):
         c.close()
         return jsonify([dict(r) for r in rows])
     except: return jsonify([])
+
+@app.route("/api/agent/<name>/tasks")
+def api_agent_tasks(name):
+    try:
+        p = DATA_DIR / "memory" / name / "tasks.json"
+        if not p.exists(): return jsonify([])
+        tasks = json.loads(p.read_text())
+        for t in tasks:
+            t.setdefault("status", "pending")
+        return jsonify(tasks)
+    except: return jsonify([])
+
+@app.route("/api/agent/<name>/analysis")
+def api_agent_analysis(name):
+    """Aggregated performance stats, memory stats, task stats, score history."""
+    result = {
+        "cycles": 0, "successes": 0, "failures": 0,
+        "tasks_pending": 0, "tasks_completed": 0, "tasks_impossible": 0,
+        "experiences": 0, "avg_score": 0,
+        "scores": [], "revisions": [], "recent_outputs": [],
+    }
+    # Performance from instruction file
+    inst = get_inst(name)
+    if inst and "performance" in inst:
+        p = inst["performance"]
+        result["cycles"] = p.get("cycles_run", 0)
+        result["successes"] = p.get("successful_outputs", 0)
+        result["failures"] = p.get("failed_outputs", 0)
+    # Task queue from memory JSON
+    try:
+        tp = DATA_DIR / "memory" / name / "tasks.json"
+        if tp.exists():
+            tasks = json.loads(tp.read_text())
+            for t in tasks:
+                s = t.get("status", "pending")
+                if s == "completed": result["tasks_completed"] += 1
+                elif s in ("impossible", "failed"): result["tasks_impossible"] += 1
+                else: result["tasks_pending"] += 1
+    except: pass
+    # Experiences from memory JSON
+    try:
+        ep = DATA_DIR / "memory" / name / "experiences.json"
+        if ep.exists():
+            exps = json.loads(ep.read_text())
+            result["experiences"] = len(exps)
+            scores = [e.get("score", 0) for e in exps if isinstance(e.get("score"), (int, float))]
+            if scores:
+                result["avg_score"] = round(sum(scores) / len(scores), 1)
+            result["recent_outputs"] = [
+                {"action": e.get("action","")[:150], "success": e.get("success",False),
+                 "timestamp": e.get("timestamp","")} for e in exps[-10:]
+            ]
+    except: pass
+    # Scores from chat history role=critic (critique output contains score)
+    try:
+        store = get_store()
+        chat = store.get_chat_history(name, 100, role="critic")
+        for c in chat:
+            out = c.get("output_response", "") or ""
+            import re
+            m = re.search(r'"score"\s*:\s*(\d+)', out)
+            if m:
+                result["scores"].append(int(m.group(1)))
+    except: pass
+    # Revisions from chat history role=supervisor
+    try:
+        sup = store.get_chat_history(name, 100, role="supervisor")
+        result["revisions"] = [{"created_at": s.get("created_at",""), "input_len": len(s.get("input_prompt","") or "")} for s in sup[-10:]]
+    except: pass
+    return jsonify(result)
+
+@app.route("/api/analysis/agents")
+def api_analysis_agents():
+    """Cross-agent comparison summary."""
+    store = get_store()
+    agents = store.get_all_agents()
+    result = []
+    for a in agents:
+        name = a["agent_name"]
+        # Load instruction performance
+        inst = get_inst(name)
+        perf = inst.get("performance", {}) if inst else {}
+        # Load experiences count
+        exp_count = 0
+        try:
+            ep = DATA_DIR / "memory" / name / "experiences.json"
+            if ep.exists(): exp_count = len(json.loads(ep.read_text()))
+        except: pass
+        # Task stats
+        pending = completed = impossible = 0
+        try:
+            tp = DATA_DIR / "memory" / name / "tasks.json"
+            if tp.exists():
+                for t in json.loads(tp.read_text()):
+                    s = t.get("status","pending")
+                    if s == "completed": completed += 1
+                    elif s in ("impossible","failed"): impossible += 1
+                    else: pending += 1
+        except: pass
+        # Chat by role
+        from master.system_store import SystemStore
+        s = SystemStore()
+        crit_chat = s.get_chat_history(name, 1, role="critic")
+        sup_chat = s.get_chat_history(name, 1, role="supervisor")
+        result.append({
+            "name": name,
+            "status": a.get("status","?"),
+            "cycles": perf.get("cycles_run", 0),
+            "successes": perf.get("successful_outputs", 0),
+            "failures": perf.get("failed_outputs", 0),
+            "experiences": exp_count,
+            "tasks_pending": pending,
+            "tasks_completed": completed,
+            "tasks_impossible": impossible,
+            "has_critic": bool(crit_chat),
+            "has_supervisor": bool(sup_chat),
+            "last_critic": crit_chat[0]["created_at"] if crit_chat else "",
+            "last_supervisor": sup_chat[0]["created_at"] if sup_chat else "",
+        })
+    return jsonify(result)
 
 # ── System API ────────────────────────────────────────────────────
 
@@ -349,6 +583,37 @@ def stream_logs():
             except GeneratorExit:
                 break
     return Response(gen(), mimetype="text/event-stream")
+
+# ── Startup initialization (runs on import, including gunicorn) ──
+
+_startup_done = False
+
+def _init_startup():
+    global _startup_done
+    if _startup_done:
+        return
+    _startup_done = True
+    # Seed agents from instructions/ directory
+    seed_agents()
+    # Restore persistent data from Hugging Face Hub (if configured)
+    try:
+        from storage.hf_sync import pull_all, push_all
+        pull_all()
+        # Periodic sync every 60s — push agent memories & builds to HF
+        def _sync_loop():
+            while True:
+                time.sleep(60)
+                try:
+                    push_all()
+                except Exception:
+                    pass
+        t = threading.Thread(target=_sync_loop, daemon=True)
+        t.start()
+        logger.info("HF storage sync thread started (every 60s)")
+    except Exception as e:
+        logger.info("HF storage not configured: {}", e)
+
+_init_startup()
 
 # ── Main ──────────────────────────────────────────────────────────
 

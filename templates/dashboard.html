@@ -7,8 +7,10 @@
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#c9d1d9;font-size:14px}
-.header{background:#161b22;border-bottom:1px solid #30363d;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100}
-.header h1{font-size:18px;color:#58a6ff}
+.header{background:#161b22;border-bottom:1px solid #30363d;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100;gap:16px}
+.header h1{font-size:18px;color:#58a6ff;white-space:nowrap}
+.header .header-controls{display:flex;gap:6px;flex-shrink:0}
+.header .stats{display:flex;gap:20px;font-size:12px;color:#8b949e;white-space:nowrap}
 .header .stats{display:flex;gap:20px;font-size:12px;color:#8b949e}
 .header .stats span{color:#c9d1d9;font-weight:600}
 .container{display:flex;height:calc(100vh-52px)}
@@ -45,12 +47,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 .tab-content.active{display:block}
 
 /* Chat view */
-.chat-entry{margin-bottom:12px;border:1px solid #21262d;border-radius:8px;overflow:hidden}
+.chat-entry{margin-bottom:12px;border:1px solid #21262d;border-radius:8px}
 .chat-entry .chat-header{display:flex;justify-content:space-between;padding:6px 12px;background:#161b22;font-size:11px;color:#8b949e;border-bottom:1px solid #21262d}
 .chat-entry .chat-input{padding:8px 12px;background:#0d1117;font-family:monospace;font-size:12px;color:#7ee787;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow-y:auto}
 .chat-entry .chat-output{padding:8px 12px;background:#0d1117;font-family:monospace;font-size:12px;color:#c9d1d9;white-space:pre-wrap;word-break:break-word;max-height:300px;overflow-y:auto}
 .chat-entry .chat-output .error{color:#f85149}
 .chat-entry .chat-meta{display:flex;gap:12px;padding:4px 12px;background:#161b22;font-size:10px;color:#484f58;border-top:1px solid #21262d}
+.chat-entry .copy-btn{background:0;border:1px solid #30363d;color:#8b949e;cursor:pointer;font-size:10px;padding:1px 8px;border-radius:4px;margin-left:auto}
+.chat-entry .copy-btn:hover{color:#e6edf3;border-color:#58a6ff}
 
 /* Instructions */
 .inst-section{margin-bottom:12px}
@@ -84,14 +88,58 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
 ::-webkit-scrollbar-track{background:#0d1117}
 ::-webkit-scrollbar-thumb{background:#30363d;border-radius:4px}
 ::-webkit-scrollbar-thumb:hover{background:#484f58}
+
+/* Analysis cards */
+.analytics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px}
+.analytics-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px 16px}
+.analytics-card .label{font-size:11px;color:#8b949e;text-transform:uppercase}
+.analytics-card .value{font-size:24px;font-weight:700;color:#e6edf3;margin-top:4px}
+.analytics-card .sub{font-size:11px;color:#484f58;margin-top:2px}
+.analytics-card .value.green{color:#3fb950}
+.analytics-card .value.red{color:#f85149}
+.analytics-card .value.yellow{color:#d29922}
+.analytics-card .value.blue{color:#58a6ff}
+.section-title{font-size:13px;color:#58a6ff;margin:16px 0 8px;font-weight:600}
+.task-bar{display:flex;height:8px;border-radius:4px;overflow:hidden;margin:8px 0}
+.task-bar .seg{height:100%}
+.task-bar .seg.green{background:#3fb950}
+.task-bar .seg.yellow{background:#d29922}
+.task-bar .seg.red{background:#f85149}
+.task-bar .seg.gray{background:#30363d}
+.experience-item{padding:8px 12px;border:1px solid #21262d;border-radius:6px;margin-bottom:6px;font-size:12px}
+.experience-item .exp-action{color:#c9d1d9;font-family:monospace;font-size:11px}
+.experience-item .exp-meta{font-size:10px;color:#484f58;margin-top:4px}
+.score-dot{display:inline-block;width:6px;height:16px;border-radius:2px;margin:0 1px}
+.score-dot.high{background:#3fb950}
+.score-dot.mid{background:#d29922}
+.score-dot.low{background:#f85149}
+
+/* Role badges */
+.role-badge{font-size:10px;padding:1px 6px;border-radius:3px;margin-left:6px;font-weight:600}
+.role-badge.supervisor{background:#1f2937;color:#60a5fa;border:1px solid #3b82f6}
+.role-badge.critic{background:#312e81;color:#a78bfa;border:1px solid #6366f1}
+.role-badge.worker{background:#1c3d2e;color:#34d399;border:1px solid #22c55e}
+
+/* Comparison table */
+.comp-table{width:100%;border-collapse:collapse;font-size:11px}
+.comp-table th{text-align:left;padding:8px 10px;background:#161b22;color:#8b949e;border-bottom:1px solid #30363d;font-weight:600;position:sticky;top:0}
+.comp-table td{padding:6px 10px;border-bottom:1px solid #21262d;color:#c9d1d9}
+.comp-table tr:hover{background:#1c2128}
+.comp-table .num{text-align:right;font-family:monospace}
+.comp-table .status-dot-sm{width:6px;height:6px;border-radius:50%;display:inline-block;margin-right:4px}
 </style>
 </head>
 <body>
 
 <div class="header">
-  <h1>⚡ Super Agent Control</h1>
+  <h1>>> Super Agent Control</h1>
+  <div class="header-controls">
+    <button class="btn btn-sm btn-primary" onclick="startAllAgents()" id="btn-start-all">&gt; Start All</button>
+    <button class="btn btn-sm btn-danger" onclick="stopAllAgents()" id="btn-stop-all">[] Stop All</button>
+    <a href="/analysis" class="btn btn-sm" style="text-decoration:none">** Analysis</a>
+  </div>
   <div class="stats">
-    <span id="stat-agents">0</span> agents · <span id="stat-running">0</span> running · <span id="stat-builds">0</span> builds · <span id="stat-time"></span>
+    <span id="stat-agents">0</span> agents - <span id="stat-running">0</span> running - <span id="stat-builds">0</span> builds - <span id="stat-tasks">0</span> tasks - <span id="stat-time"></span>
   </div>
 </div>
 
@@ -118,6 +166,8 @@ let currentAgent = null;
 let agents = {};
 let logSources = [];
 let currentTab = 'chat';
+let _tabCache = {};    // {agentName_tabId: htmlString}
+let _tabLoading = {};  // track in-flight loads
 
 function $(id){return document.getElementById(id)}
 
@@ -146,7 +196,7 @@ async function loadAgentList(){
     html += '<div class="agent-card'+(currentAgent===a.agent_name?' active':'')+'" onclick="selectAgent(\''+a.agent_name+'\')">'+
       '<div class="top"><span class="name"><span class="status-dot '+dotClass+'"></span>'+escapeHTML(a.agent_name)+'</span>'+
       '<span class="badge">'+(a.build_count||0)+' builds</span></div>'+
-      '<div class="status-text">'+escapeHTML(a.status||'registered')+' · '+(a.current_task||'idle')+'</div>'+
+      '<div class="status-text">'+escapeHTML(a.status||'registered')+' - '+(a.current_task||'idle')+'</div>'+
       (live ? '<div class="live-preview">'+escapeHTML(live.slice(0,120))+'</div>' : '')+
       '</div>';
   });
@@ -155,11 +205,15 @@ async function loadAgentList(){
   $('stat-running').textContent = running;
   $('stat-builds').textContent = builds;
   $('stat-time').textContent = new Date().toLocaleTimeString();
-  if(currentAgent && agents[currentAgent]) refreshAgent();
+  // Show initial panel if none selected yet
+  if(!currentAgent && data.length > 0){
+    selectAgent(data[0].agent_name);
+  }
 }
 
 async function selectAgent(name){
   currentAgent = name;
+  _tabCache = {}; // clear cache for new agent
   $('agent-list').querySelectorAll('.agent-card').forEach(c => c.classList.remove('active'));
   const cards = $('agent-list').children;
   for(let c of cards){
@@ -178,35 +232,62 @@ async function refreshAgent(){
     fetchJSON('/api/logs?agent='+currentAgent+'&limit=100'),
   ]);
   if(!agent) return;
-  $('detail-name').textContent = '⚡ '+agent.agent_name;
+  $('detail-name').textContent = '>> '+agent.agent_name;
   $('btn-start').style.display = agent.status === 'running' ? 'none' : 'inline-block';
   $('btn-stop').style.display = agent.status === 'running' ? 'inline-block' : 'none';
   $('btn-restart').style.display = 'inline-block';
   const panel = $('detail-panel');
-  panel.innerHTML = renderAgentDetail(agent, inst, chat, builds, logs);
-  if(currentTab) switchTab(null, currentTab);
+  // If panel is empty (first load), build full layout
+  if(!panel.querySelector('.tabs')){
+    panel.innerHTML = renderAgentDetail(agent, inst, chat, builds, logs);
+    if(currentTab) switchTab(null, currentTab);
+  } else {
+    // Update only the active tab's content region
+    const cacheKey = currentAgent+'_'+currentTab;
+    if(currentTab === 'chat'){
+      _tabCache[cacheKey] = renderChatTab(chat);
+      const tc = document.getElementById('tab-chat');
+      if(tc && tc.classList.contains('active')) tc.innerHTML = _tabCache[cacheKey];
+    } else if(currentTab === 'instructions'){
+      _tabCache[cacheKey] = renderInstructionsTab(inst);
+      const tc = document.getElementById('tab-instructions');
+      if(tc && tc.classList.contains('active')) tc.innerHTML = _tabCache[cacheKey];
+    } else if(currentTab === 'builds'){
+      _tabCache[cacheKey] = renderBuildsTab(builds);
+      const tc = document.getElementById('tab-builds');
+      if(tc && tc.classList.contains('active')) tc.innerHTML = _tabCache[cacheKey];
+    } else if(currentTab === 'logs'){
+      _tabCache[cacheKey] = renderLogsTab(logs);
+      const tc = document.getElementById('tab-logs');
+      if(tc && tc.classList.contains('active')) tc.innerHTML = _tabCache[cacheKey];
+    }
+    // Also update stat badges in header
+    const agentCard = document.querySelector('.agent-card.active .badge');
+    if(agentCard) agentCard.textContent = (agent.build_count||0)+' builds';
+    $('stat-builds').textContent = agent.build_count||0;
+  }
 }
 
-function renderAgentDetail(agent, inst, chat, builds, logs){
-  let html = '<div class="tabs">'+
-    '<div class="tab" data-tab="chat" onclick="switchTab(this,\'chat\')">Chat History</div>'+
-    '<div class="tab" data-tab="instructions" onclick="switchTab(this,\'instructions\')">Instructions</div>'+
-    '<div class="tab" data-tab="builds" onclick="switchTab(this,\'builds\')">Builds ('+(agent.build_count||0)+')</div>'+
-    '<div class="tab" data-tab="logs" onclick="switchTab(this,\'logs\')">Logs</div>'+
-    '<div class="tab" data-tab="advise" onclick="switchTab(this,\'advise\')">Send Advice</div>'+
+function renderChatTab(chat){
+  let html = '<div class="log-filter" style="margin-bottom:8px;display:flex;gap:8px;align-items:center">'+
+    '<label>Role:</label><select id="chat-role-filter" onchange="filterChatByRole()">'+
+    '<option value="">All roles</option><option value="supervisor">Supervisor</option>'+
+    '<option value="critic">Critic</option><option value="worker">Worker</option></select>'+
+    '<button class="btn btn-sm" onclick="copyAllChat()" style="margin-left:auto">[+] Copy All</button>'+
     '</div>';
-
-  // Chat tab
-  html += '<div id="tab-chat" class="tab-content active">';
   if(!chat || chat.length === 0){
     html += '<div class="empty">No LLM interactions yet</div>';
   } else {
-    chat.slice().reverse().forEach(e => {
+    chat.slice().reverse().forEach((e, i) => {
       const dur = e.duration_ms ? (e.duration_ms/1000).toFixed(1)+'s' : '';
-      html += '<div class="chat-entry">'+
+      const role = e.role || 'worker';
+      const roleBadge = '<span class="role-badge '+role+'">'+role+'</span>';
+      const eid = 'chat-'+currentAgent+'-'+i;
+      html += '<div class="chat-entry" data-role="'+role+'" id="'+eid+'">'+
         '<div class="chat-header">'+
-        '<span>INPUT → '+(e.execution_mode||'hermes')+'</span>'+
-        '<span>'+escapeHTML(e.created_at||'')+' · '+dur+(e.tokens_used?' · '+e.tokens_used+' tokens':'')+'</span>'+
+        '<span>INPUT  &gt;  '+(e.execution_mode||'hermes')+' '+roleBadge+'</span>'+
+        '<span>'+escapeHTML(e.created_at||'')+' - '+dur+(e.tokens_used?' - '+e.tokens_used+' tokens':'')+'</span>'+
+        '<button class="copy-btn" onclick="copyChatEntry(\''+eid+'\')">[+] Copy</button>'+
         '</div>'+
         '<div class="chat-input">'+escapeHTML(e.input_prompt||'(empty)')+'</div>';
       if(e.output_response){
@@ -215,94 +296,88 @@ function renderAgentDetail(agent, inst, chat, builds, logs){
         html += '<div class="chat-output error">ERROR: '+escapeHTML(e.error_message)+'</div>';
       }
       html += '<div class="chat-meta">'+
-        '<span>'+(e.success ? '✓ Success' : '✗ Failed')+'</span>'+
+        '<span>'+(e.success ? 'OK Success' : 'FAIL Failed')+'</span>'+
         (e.execution_mode ? '<span>Mode: '+e.execution_mode+'</span>' : '')+
         '</div></div>';
     });
   }
-  html += '</div>';
+  return html;
+}
 
-  // Instructions tab
-  html += '<div id="tab-instructions" class="tab-content">';
-  if(inst){
-    html += '<div class="inst-section"><h4>Seed Instruction</h4><pre>'+escapeHTML(inst.seed_instruction||'')+'</pre></div>';
-    html += '<div class="inst-section"><h4>Genesis Prompt</h4><pre>'+escapeHTML(inst.genesis_prompt||'')+'</pre></div>';
-    if(inst.instructions && inst.instructions.length){
-      html += '<div class="inst-section"><h4>Learned Instructions ('+inst.instructions.length+')</h4>';
-      inst.instructions.forEach((i,idx) => html += '<pre>'+(idx+1)+'. '+escapeHTML(i)+'</pre>');
-      html += '</div>';
-    }
-    if(inst.resources_required && inst.resources_required.length){
-      html += '<div class="inst-section"><h4>Required Resources</h4>';
-      inst.resources_required.forEach(r => {
-        const prov = r.provisioned ? 'provisioned' : '';
-        html += '<div class="resource '+prov+'">'+
-          '<strong>'+escapeHTML(r.id)+'</strong> ('+r.type+')'+
-          ' · '+(r.required?'Required':'Optional')+
-          ' · Mode: '+r.execution_mode+
-          (r.self_provisionable ? ' · Self-provisionable' : '')+
-          (r.description ? '<br>'+escapeHTML(r.description) : '')+
-          (r.platform_rules ? '<br><strong>Rules:</strong> '+(r.platform_rules.critical_rules||[]).join(', ') : '')+
-          '</div>';
-      });
-      html += '</div>';
-    }
-    if(inst.evolutions && inst.evolutions.length){
-      html += '<div class="inst-section"><h4>Evolution History ('+inst.evolutions.length+')</h4>';
-      inst.evolutions.slice(-10).reverse().forEach(ev => {
-        html += '<pre>['+ev.timestamp+'] Cycle '+ev.cycle+': '+(ev.success?'✓':'✗')+' '+escapeHTML(ev.lesson||'')+'</pre>';
-      });
-      html += '</div>';
-    }
-    if(inst.platform_rules){
-      const pr = inst.platform_rules;
-      if(Object.keys(pr).length){
-        html += '<div class="inst-section"><h4>Platform Rules</h4>';
-        for(const [platform, rules] of Object.entries(pr)){
-          html += '<h5>'+platform+'</h5>';
-          if(rules.critical_rules) rules.critical_rules.forEach(r => html += '<pre>CRITICAL: '+escapeHTML(r)+'</pre>');
-          if(rules.recommendations) rules.recommendations.forEach(r => html += '<pre>RECOMMEND: '+escapeHTML(r)+'</pre>');
-        }
-        html += '</div>';
-      }
-    }
-    if(inst.performance){
-      html += '<div class="inst-section"><h4>Performance</h4><pre>'+
-        'Cycles: '+inst.performance.cycles_run+
-        ' · Successes: '+inst.performance.successful_outputs+
-        ' · Failures: '+inst.performance.failed_outputs+
-        ' · Resources Provisioned: '+inst.performance.resources_provisioned+
-        '</pre></div>';
-    }
-    if(inst.sub_agents && Object.keys(inst.sub_agents).length){
-      html += '<div class="inst-section"><h4>Sub-Agents</h4>';
-      for(const [platform, sa] of Object.entries(inst.sub_agents)){
-        html += '<pre>'+platform+' → '+escapeHTML(sa.name)+' (created '+sa.created_at+')</pre>';
-      }
-      html += '</div>';
-    }
-  } else {
-    html += '<div class="empty">No instruction set found</div>';
+function renderInstructionsTab(inst){
+  if(!inst) return '<div class="empty">No instruction set found</div>';
+  let html = '';
+  html += '<div class="inst-section"><h4>Seed Instruction</h4><pre>'+escapeHTML(inst.seed_instruction||'')+'</pre></div>';
+  html += '<div class="inst-section"><h4>Genesis Prompt</h4><pre>'+escapeHTML(inst.genesis_prompt||'')+'</pre></div>';
+  if(inst.instructions && inst.instructions.length){
+    html += '<div class="inst-section"><h4>Learned Instructions ('+inst.instructions.length+')</h4>';
+    inst.instructions.forEach((i,idx) => html += '<pre>'+(idx+1)+'. '+escapeHTML(i)+'</pre>');
+    html += '</div>';
   }
-  html += '</div>';
-
-  // Builds tab
-  html += '<div id="tab-builds" class="tab-content">';
-  if(!builds || builds.length === 0){
-    html += '<div class="empty">No builds yet</div>';
-  } else {
-    builds.forEach(b => {
-      html += '<div class="chat-entry">'+
-        '<div class="chat-header"><span>'+escapeHTML(b.filename)+'</span><span>'+(b.timestamp||'')+' · '+(b.size||0)+' bytes</span></div>'+
-        '<div class="chat-output" style="max-height:200px">'+escapeHTML(b.preview||'')+'</div>'+
+  if(inst.resources_required && inst.resources_required.length){
+    html += '<div class="inst-section"><h4>Required Resources</h4>';
+    inst.resources_required.forEach(r => {
+      const prov = r.provisioned ? 'provisioned' : '';
+      html += '<div class="resource '+prov+'">'+
+        '<strong>'+escapeHTML(r.id)+'</strong> ('+r.type+')'+
+        ' - '+(r.required?'Required':'Optional')+
+        ' - Mode: '+r.execution_mode+
+        (r.self_provisionable ? ' - Self-provisionable' : '')+
+        (r.description ? '<br>'+escapeHTML(r.description) : '')+
+        (r.platform_rules ? '<br><strong>Rules:</strong> '+(r.platform_rules.critical_rules||[]).join(', ') : '')+
         '</div>';
     });
+    html += '</div>';
   }
-  html += '</div>';
+  if(inst.evolutions && inst.evolutions.length){
+    html += '<div class="inst-section"><h4>Evolution History ('+inst.evolutions.length+')</h4>';
+    inst.evolutions.slice(-10).reverse().forEach(ev => {
+      html += '<pre>['+ev.timestamp+'] Cycle '+ev.cycle+': '+(ev.success?'OK':'FAIL')+' '+escapeHTML(ev.lesson||'')+'</pre>';
+    });
+    html += '</div>';
+  }
+  if(inst.platform_rules){
+    const pr = inst.platform_rules;
+    if(Object.keys(pr).length){
+      html += '<div class="inst-section"><h4>Platform Rules</h4>';
+      for(const [platform, rules] of Object.entries(pr)){
+        html += '<h5>'+platform+'</h5>';
+        if(rules.critical_rules) rules.critical_rules.forEach(r => html += '<pre>CRITICAL: '+escapeHTML(r)+'</pre>');
+        if(rules.recommendations) rules.recommendations.forEach(r => html += '<pre>RECOMMEND: '+escapeHTML(r)+'</pre>');
+      }
+      html += '</div>';
+    }
+  }
+  if(inst.performance){
+    html += '<div class="inst-section"><h4>Performance</h4><pre>'+
+      'Cycles: '+inst.performance.cycles_run+
+      ' - Successes: '+inst.performance.successful_outputs+
+      ' - Failures: '+inst.performance.failed_outputs+
+      ' - Resources Provisioned: '+inst.performance.resources_provisioned+
+      '</pre></div>';
+  }
+  if(inst.sub_agents && Object.keys(inst.sub_agents).length){
+    html += '<div class="inst-section"><h4>Sub-Agents</h4>';
+    for(const [platform, sa] of Object.entries(inst.sub_agents)){
+      html += '<pre>'+platform+'  &gt;  '+escapeHTML(sa.name)+' (created '+sa.created_at+')</pre>';
+    }
+    html += '</div>';
+  }
+  return html;
+}
 
-  // Logs tab
-  html += '<div id="tab-logs" class="tab-content">';
-  html += '<div class="log-filter">'+
+function renderBuildsTab(builds){
+  if(!builds || builds.length === 0) return '<div class="empty">No builds yet</div>';
+  return builds.map(b => {
+    return '<div class="chat-entry">'+
+      '<div class="chat-header"><span>'+escapeHTML(b.filename)+'</span><span>'+(b.timestamp||'')+' - '+(b.size||0)+' bytes</span></div>'+
+      '<div class="chat-output" style="max-height:200px">'+escapeHTML(b.preview||'')+'</div>'+
+      '</div>';
+  }).join('');
+}
+
+function renderLogsTab(logs){
+  let html = '<div class="log-filter">'+
     '<label>Level:</label><select id="log-level-filter" onchange="filterLogs()">'+
     '<option value="">All</option><option value="DEBUG">DEBUG</option><option value="INFO">INFO</option>'+
     '<option value="WARNING">WARNING</option><option value="ERROR">ERROR</option></select>'+
@@ -317,16 +392,71 @@ function renderAgentDetail(agent, inst, chat, builds, logs){
         '<span class="log-msg">'+escapeHTML(l.msg||l.message||'')+'</span></div>';
     });
   }
-  html += '</div></div>';
+  html += '</div>';
+  return html;
+}
 
-  // Advise tab
-  html += '<div id="tab-advise" class="tab-content">'+
-    '<div class="inst-section"><h4>Send Advice to '+escapeHTML(agent.agent_name)+'</h4>'+
+function renderAgentDetail(agent, inst, chat, builds, logs){
+  let html = '<div class="tabs">'+
+    '<div class="tab" data-tab="chat" onclick="switchTab(this,\'chat\')">Chat History</div>'+
+    '<div class="tab" data-tab="analysis" onclick="switchTab(this,\'analysis\')">Analysis</div>'+
+    '<div class="tab" data-tab="instructions" onclick="switchTab(this,\'instructions\')">Instructions</div>'+
+    '<div class="tab" data-tab="builds" onclick="switchTab(this,\'builds\')">Builds ('+(agent.build_count||0)+')</div>'+
+    '<div class="tab" data-tab="logs" onclick="switchTab(this,\'logs\')">Logs</div>'+
+    '<div class="tab" data-tab="finance" onclick="switchTab(this,\'finance\')">Finance</div>'+
+    '<div class="tab" data-tab="tasks" onclick="switchTab(this,\'tasks\')">Human Tasks</div>'+
+    '<div class="tab" data-tab="advise" onclick="switchTab(this,\'advise\')">Send Advice</div>'+
+    '</div>';
+
+  // Cache all tab content
+  _tabCache[currentAgent+'_chat'] = renderChatTab(chat);
+  _tabCache[currentAgent+'_instructions'] = renderInstructionsTab(inst);
+  _tabCache[currentAgent+'_builds'] = renderBuildsTab(builds);
+  _tabCache[currentAgent+'_logs'] = renderLogsTab(logs);
+  // Clear analysis/finance/tasks caches so they lazy-load on first switch
+  delete _tabCache[currentAgent+'_analysis'];
+  delete _tabCache[currentAgent+'_finance'];
+  delete _tabCache[currentAgent+'_tasks'];
+
+  html += '<div id="tab-chat" class="tab-content active">'+_tabCache[currentAgent+'_chat']+'</div>';
+  html += '<div id="tab-analysis" class="tab-content"><div id="analysis-content"><div class="empty">Loading analysis...</div></div></div>';
+  html += '<div id="tab-instructions" class="tab-content">'+_tabCache[currentAgent+'_instructions']+'</div>';
+  html += '<div id="tab-builds" class="tab-content">'+_tabCache[currentAgent+'_builds']+'</div>';
+  html += '<div id="tab-logs" class="tab-content">'+_tabCache[currentAgent+'_logs']+'</div>';
+  html += '<div id="tab-finance" class="tab-content"><div id="finance-content"><div class="empty-state">Select an agent to view finance data.</div></div></div>';
+  html += '<div id="tab-tasks" class="tab-content"><div id="tasks-content"><div class="empty-state">Loading tasks...</div></div></div>';
+  html += '<div id="tab-advise" class="tab-content"><div class="inst-section"><h4>Send Advice to '+escapeHTML(agent.agent_name)+'</h4>'+
     '<textarea id="advise-text" style="width:100%;height:120px;padding:8px;border-radius:6px;border:1px solid #30363d;background:#0d1117;color:#c9d1d9;font-family:monospace;font-size:12px;resize:vertical" placeholder="Type advice for this agent..."></textarea>'+
     '<button class="btn btn-primary" style="margin-top:8px" onclick="sendAdvice()">Send Advice</button>'+
     '<div id="advise-result" style="margin-top:8px;font-size:12px"></div></div></div>';
 
   return html;
+}
+
+function copyChatEntry(eid){
+  const el = document.getElementById(eid);
+  if(!el) return;
+  const input = el.querySelector('.chat-input');
+  const output = el.querySelector('.chat-output');
+  let text = '';
+  if(input) text += 'INPUT:\n' + input.textContent + '\n\n';
+  if(output) text += 'OUTPUT:\n' + output.textContent;
+  navigator.clipboard.writeText(text.trim()).catch(() => {});
+}
+
+function copyAllChat(){
+  const entries = document.querySelectorAll('#tab-chat .chat-entry');
+  let text = '';
+  entries.forEach(el => {
+    const header = el.querySelector('.chat-header');
+    const input = el.querySelector('.chat-input');
+    const output = el.querySelector('.chat-output');
+    if(header) text += header.textContent.trim() + '\n';
+    if(input) text += 'INPUT:\n' + input.textContent + '\n';
+    if(output) text += 'OUTPUT:\n' + output.textContent + '\n';
+    text += '---\n\n';
+  });
+  navigator.clipboard.writeText(text.trim()).catch(() => {});
 }
 
 function switchTab(el, tabId){
@@ -337,6 +467,281 @@ function switchTab(el, tabId){
   if(tabEl) tabEl.classList.add('active');
   const tc = document.getElementById('tab-'+tabId);
   if(tc) tc.classList.add('active');
+
+  const cacheKey = currentAgent+'_'+tabId;
+  // Use cached content if available
+  if(_tabCache[cacheKey] && tabId !== 'advise'){
+    if(tabId === 'chat') tc.innerHTML = _tabCache[cacheKey];
+    else if(tabId === 'instructions') tc.innerHTML = _tabCache[cacheKey];
+    else if(tabId === 'builds') tc.innerHTML = _tabCache[cacheKey];
+    else if(tabId === 'logs') tc.innerHTML = _tabCache[cacheKey];
+    else if(tabId === 'analysis') document.getElementById('analysis-content').innerHTML = _tabCache[cacheKey];
+    else if(tabId === 'finance') document.getElementById('finance-content').innerHTML = _tabCache[cacheKey];
+    else if(tabId === 'tasks') document.getElementById('tasks-content').innerHTML = _tabCache[cacheKey];
+    return;
+  }
+
+  if(tabId === 'analysis') loadAnalysis();
+  if(tabId === 'finance') loadFinance();
+  if(tabId === 'tasks') loadTasks();
+}
+
+function filterChatByRole(){
+  const role = document.getElementById('chat-role-filter').value;
+  document.querySelectorAll('.chat-entry').forEach(e => {
+    e.style.display = role && e.dataset.role !== role ? 'none' : '';
+  });
+}
+
+async function loadAnalysis(){
+  if(!currentAgent) return;
+  const el = document.getElementById('analysis-content');
+  if(!el) return;
+  // Check cache first
+  const cacheKey = currentAgent+'_analysis';
+  if(_tabCache[cacheKey]){ el.innerHTML = _tabCache[cacheKey]; return; }
+  if(_tabLoading[cacheKey]) return;
+  _tabLoading[cacheKey] = true;
+  try {
+    const [analysis, tasks, comp] = await Promise.all([
+      fetchJSON('/api/agent/'+currentAgent+'/analysis'),
+      fetchJSON('/api/agent/'+currentAgent+'/tasks'),
+      fetchJSON('/api/analysis/agents'),
+    ]);
+    _tabCache[cacheKey] = renderAnalysis(analysis, tasks, comp);
+    el.innerHTML = _tabCache[cacheKey];
+  } catch(e){
+    el.innerHTML = '<div class="empty">Failed to load analysis: '+e.message+'</div>';
+  } finally {
+    delete _tabLoading[cacheKey];
+  }
+}
+
+function renderAnalysis(analysis, tasks, comp){
+  const total = analysis.tasks_pending + analysis.tasks_completed + analysis.tasks_impossible;
+  const pct = total > 0 ? Math.round(analysis.tasks_completed / total * 100) : 0;
+  const succRate = analysis.cycles > 0 ? Math.round(analysis.successes / analysis.cycles * 100) : 0;
+  const scoreDots = analysis.scores.map(s =>
+    '<span class="score-dot '+(s>=7?'high':s>=4?'mid':'low')+'" title="Score: '+s+'/10"></span>'
+  ).join('');
+
+  let html = '';
+
+  // Top stat cards
+  html += '<div class="analytics-grid">'+
+    '<div class="analytics-card"><div class="label">Cycles Run</div><div class="value blue">'+analysis.cycles+'</div></div>'+
+    '<div class="analytics-card"><div class="label">Success Rate</div><div class="value '+(succRate>=50?'green':'yellow')+'">'+succRate+'%</div><div class="sub">'+analysis.successes+'OK / '+analysis.failures+'FAIL</div></div>'+
+    '<div class="analytics-card"><div class="label">Experiences</div><div class="value blue">'+analysis.experiences+'</div></div>'+
+    '<div class="analytics-card"><div class="label">Avg Critic Score</div><div class="value '+(analysis.avg_score>=7?'green':analysis.avg_score>=4?'yellow':'red')+'">'+(analysis.avg_score||'--')+'<span style="font-size:14px">/10</span></div></div>'+
+    '</div>';
+
+  // Task progress bar
+  html += '<div class="section-title">Task Queue</div>';
+  if(total > 0){
+    const pw = Math.round(analysis.tasks_pending/total*100);
+    const cw = Math.round(analysis.tasks_completed/total*100);
+    const iw = Math.round(analysis.tasks_impossible/total*100);
+    html += '<div class="task-bar">'+
+      '<div class="seg green" style="width:'+cw+'%" title="Completed: '+analysis.tasks_completed+'"></div>'+
+      '<div class="seg yellow" style="width:'+pw+'%" title="Pending: '+analysis.tasks_pending+'"></div>'+
+      '<div class="seg red" style="width:'+iw+'%" title="Impossible: '+analysis.tasks_impossible+'"></div>'+
+      '</div>'+
+      '<div style="font-size:11px;color:#8b949e;display:flex;gap:16px">'+
+      '<span>OK Completed: '+analysis.tasks_completed+'</span>'+
+      '<span>. Pending: '+analysis.tasks_pending+'</span>'+
+      '<span>FAIL Impossible: '+analysis.tasks_impossible+'</span>'+
+      '</div>';
+  } else {
+    html += '<div style="color:#484f58;font-size:12px">No tasks yet</div>';
+  }
+
+  // Current task list
+  if(tasks && tasks.length){
+    html += '<div class="section-title">All Tasks</div>';
+    tasks.forEach(t => {
+      const sc = t.status;
+      const dot = sc==='completed'?'OK':sc==='impossible'||sc==='failed'?'FAIL':'.';
+      const clr = sc==='completed'?'#3fb950':sc==='impossible'||sc==='failed'?'#f85149':'#d29922';
+      html += '<div style="font-size:12px;padding:4px 0;border-bottom:1px solid #21262d;display:flex;justify-content:space-between">'+
+        '<span><span style="color:'+clr+'">'+dot+'</span> '+escapeHTML(t.description||t.id).slice(0,80)+'</span>'+
+        '<span style="color:#8b949e;font-size:10px">'+sc+'</span></div>';
+    });
+  }
+
+  // Score history
+  if(analysis.scores && analysis.scores.length){
+    html += '<div class="section-title">Critic Score History ('+analysis.scores.length+' evaluations)</div>';
+    html += '<div style="padding:8px 0">'+scoreDots+'</div>';
+  }
+
+  // Revision history
+  if(analysis.revisions && analysis.revisions.length){
+    html += '<div class="section-title">Supervisor Revisions ('+analysis.revisions.length+')</div>';
+    analysis.revisions.slice().reverse().forEach(r => {
+      html += '<div style="font-size:11px;padding:4px 0;color:#8b949e">'+
+        '<span style="color:#60a5fa">S</span> '+(r.created_at||'').slice(11,19)+' -- '+r.input_len+' chars</div>';
+    });
+  }
+
+  // Recent experiences
+  if(analysis.recent_outputs && analysis.recent_outputs.length){
+    html += '<div class="section-title">Recent Experiences</div>';
+    analysis.recent_outputs.slice().reverse().forEach(e => {
+      html += '<div class="experience-item">'+
+        '<div class="exp-action">'+(e.success?'OK ':'FAIL ')+escapeHTML(e.action||'')+'</div>'+
+        '<div class="exp-meta">'+(e.timestamp||'')+'</div></div>';
+    });
+  }
+
+  // Cross-agent comparison
+  html += '<div class="section-title">Agent Comparison</div>';
+  if(comp && comp.length){
+    html += '<div style="overflow-x:auto"><table class="comp-table">'+
+      '<tr><th>Agent</th><th>Status</th><th class="num">Cycles</th><th class="num">Success</th><th class="num">Fail</th><th class="num">Exp</th><th class="num">TasksOK</th><th>S Critic</th><th>S Super</th></tr>';
+    comp.forEach(a => {
+      const color = a.status==='running'?'#3fb950':a.status==='idle'?'#d29922':'#f85149';
+      html += '<tr>'+
+        '<td><span class="status-dot-sm" style="background:'+color+'"></span>'+escapeHTML(a.name)+'</td>'+
+        '<td>'+a.status+'</td>'+
+        '<td class="num">'+a.cycles+'</td>'+
+        '<td class="num" style="color:#3fb950">'+a.successes+'</td>'+
+        '<td class="num" style="color:#f85149">'+a.failures+'</td>'+
+        '<td class="num">'+a.experiences+'</td>'+
+        '<td class="num">'+a.tasks_completed+'</td>'+
+        '<td style="font-size:10px;color:#a78bfa">'+(a.has_critic?a.last_critic.slice(11,19):'--')+'</td>'+
+        '<td style="font-size:10px;color:#60a5fa">'+(a.has_supervisor?a.last_supervisor.slice(11,19):'--')+'</td>'+
+        '</tr>';
+    });
+    html += '</table></div>';
+  }
+
+  return html;
+}
+
+async function loadFinance(){
+  if(!currentAgent) return;
+  const el = document.getElementById('finance-content');
+  const cacheKey = currentAgent+'_finance';
+  if(_tabCache[cacheKey]){ el.innerHTML = _tabCache[cacheKey]; return; }
+  if(_tabLoading[cacheKey]) return;
+  _tabLoading[cacheKey] = true;
+  el.innerHTML = '<div class="empty-state">Loading...</div>';
+  try {
+    const f = await fetchJSON('/api/finance/'+currentAgent);
+    _tabCache[cacheKey] = renderFinance(f);
+    el.innerHTML = _tabCache[cacheKey];
+  } catch(e) {
+    el.innerHTML = '<div class="empty-state">Error: '+e.message+'</div>';
+  } finally {
+    delete _tabLoading[cacheKey];
+  }
+}
+
+function renderFinance(f){
+  let html = '<div class="analytics-grid">'+
+    '<div class="analytics-card"><div class="label">Balance</div><div class="value '+(f.balance>=0?'green':'red')+'">$'+(f.balance||0).toFixed(2)+'</div></div>'+
+    '<div class="analytics-card"><div class="label">Total Earned</div><div class="value green">$'+(f.total_earned||0).toFixed(2)+'</div></div>'+
+    '<div class="analytics-card"><div class="label">Total Spent</div><div class="value red">$'+(f.total_spent||0).toFixed(2)+'</div></div>'+
+    '<div class="analytics-card"><div class="label">Accounts</div><div class="value blue">'+Object.keys(f.accounts).length+'</div><div class="sub">'+(Object.keys(f.accounts).join(', ')||'none')+'</div></div>'+
+    '</div>';
+
+  // Needed accounts
+  if(f.needed_accounts && f.needed_accounts.length){
+    html += '<div class="section-title">Accounts Needed (ask user)</div>';
+    f.needed_accounts.forEach(n => {
+      html += '<div class="inst-section"><div class="resource">'+
+        '<strong>'+escapeHTML(n.label)+'</strong> -- '+escapeHTML(n.income_potential)+
+        '<br><span style="color:#8b949e;font-size:11px">Setup: <a href="'+escapeHTML(n.setup_url)+'" target="_blank" style="color:#58a6ff">'+escapeHTML(n.setup_url)+'</a></span>'+
+        '<br><span style="color:#484f58;font-size:10px">Env vars: '+escapeHTML(n.env_keys.join(', '))+'</span></div></div>';
+    });
+  }
+
+  // Active accounts
+  const active = Object.entries(f.accounts).filter(([,a])=>a.status==='active');
+  if(active.length){
+    html += '<div class="section-title">Active Accounts</div>';
+    active.forEach(([pid, acc]) => {
+      html += '<div class="inst-section"><div class="resource provisioned">'+
+        '<strong>'+escapeHTML(pid)+'</strong>'+
+        (acc.username?' <span style="color:#8b949e">('+escapeHTML(acc.username)+')</span>':'')+
+        '</div></div>';
+    });
+  }
+
+  // Transactions
+  if(f.transactions && f.transactions.length){
+    html += '<div class="section-title">Recent Transactions</div>';
+    f.transactions.slice().reverse().forEach(t => {
+      const sign = t.type==='income' ? '<span style="color:#3fb950">+$'+t.amount.toFixed(2)+'</span>' : '<span style="color:#f85149">-$'+t.amount.toFixed(2)+'</span>';
+      html += '<div class="experience-item">'+sign+' -- '+escapeHTML(t.source||t.purpose||'')+
+        ' <span style="color:#484f58;font-size:10px">'+(t.timestamp||'').slice(11,19)+'</span></div>';
+    });
+  }
+
+  return html;
+}
+
+async function loadTasks(){
+  const el = document.getElementById('tasks-content');
+  const cacheKey = currentAgent+'_tasks';
+  if(_tabCache[cacheKey]){ el.innerHTML = _tabCache[cacheKey]; return; }
+  if(_tabLoading[cacheKey]) return;
+  _tabLoading[cacheKey] = true;
+  el.innerHTML = '<div class="empty-state">Loading...</div>';
+  try {
+    const data = await fetchJSON('/api/human-tasks');
+    _tabCache[cacheKey] = renderTasks(data);
+    el.innerHTML = _tabCache[cacheKey];
+    document.getElementById('stat-tasks').textContent = data.pending.length;
+  } catch(e) {
+    el.innerHTML = '<div class="empty-state">Error: '+e.message+'</div>';
+  } finally {
+    delete _tabLoading[cacheKey];
+  }
+}
+
+function renderTasks(data){
+  let html = '<div class="section-title">Pending Tasks ('+data.pending.length+')</div>';
+  if(!data.pending.length){
+    html += '<div class="empty-state">No pending tasks -- all caught up!</div>';
+  } else {
+    data.pending.forEach(t => {
+      html += '<div class="inst-section"><div class="resource">'+
+        '<div style="display:flex;justify-content:space-between;align-items:center">'+
+        '<strong>'+escapeHTML(t.title)+'</strong> <span style="font-size:10px;color:#8b949e">'+escapeHTML(t.agent)+'</span></div>'+
+        '<div style="margin:8px 0;padding:8px;background:#0d1117;border-radius:4px;font-size:11px;white-space:pre-wrap">'+escapeHTML(t.instructions)+'</div>'+
+        '<div style="display:flex;gap:8px;align-items:center">'+
+        '<a href="'+escapeHTML(t.url)+'" target="_blank" class="btn btn-primary btn-sm" style="text-decoration:none">'+
+        'Open '+escapeHTML(t.url.split('/')[2]||'link')+'</a>'+
+        '<button class="btn btn-sm" onclick="completeTask(\''+t.id+'\')">Mark Done</button>'+
+        (t.email?'<span style="font-size:10px;color:#484f58">Use: '+escapeHTML(t.email)+'</span>':'')+
+        '</div></div></div>';
+    });
+  }
+
+  if(data.recent && data.recent.filter(t=>t.status==='completed').length){
+    const done = data.recent.filter(t=>t.status==='completed');
+    html += '<div class="section-title" style="margin-top:16px">Completed ('+done.length+')</div>';
+    done.slice(0,10).forEach(t => {
+      html += '<div class="experience-item" style="display:flex;justify-content:space-between">'+
+        '<span style="color:#3fb950">OK</span> '+escapeHTML(t.title)+
+        ' <span style="color:#484f58;font-size:10px">'+(t.completed_at||'').slice(11,19)+'</span></div>';
+    });
+  }
+
+  return html;
+}
+
+async function completeTask(taskId){
+  try {
+    const r = await fetch('/api/human-tasks/'+taskId+'/complete', {method:'POST'});
+    if(r.ok) {
+      delete _tabCache[currentAgent+'_tasks'];
+      loadTasks();
+    }
+  } catch(e) {
+    alert('Failed: '+e.message);
+  }
 }
 
 function filterLogs(){
@@ -354,7 +759,7 @@ function sendAdvice(){
   if(!msg) return;
   fetch('/api/advise', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({agent_name:currentAgent,message:msg})})
     .then(r=>r.json()).then(d => {
-      document.getElementById('advise-result').textContent = d.success ? '✓ Sent!' : '✗ Error';
+      document.getElementById('advise-result').textContent = d.success ? 'OK Sent!' : 'FAIL Error';
       document.getElementById('advise-text').value = '';
     });
 }
@@ -362,6 +767,22 @@ function sendAdvice(){
 async function postJSON(url){
   const r = await fetch(url, {method:'POST'});
   return r.json();
+}
+
+async function startAllAgents(){
+  const btn = document.getElementById('btn-start-all');
+  btn.disabled = true; btn.textContent = '... Starting...';
+  await postJSON('/api/agents/start-all');
+  btn.disabled = false; btn.textContent = '&gt; Start All';
+  loadAgentList();
+}
+
+async function stopAllAgents(){
+  const btn = document.getElementById('btn-stop-all');
+  btn.disabled = true; btn.textContent = '... Stopping...';
+  await postJSON('/api/agents/stop-all');
+  btn.disabled = false; btn.textContent = '[] Stop All';
+  loadAgentList();
 }
 
 async function startAgent(name){
@@ -381,7 +802,7 @@ async function restartAgent(name){
 
 
 
-// ── Poll live logs ───────────────────────────────────────────────
+// -- Poll live logs ----
 async function pollLogs(){
   try {
     const logs = await fetchJSON('/api/logs?limit=50');
@@ -403,8 +824,9 @@ async function pollLogs(){
 }
 setInterval(pollLogs, 2000);
 
-// ── Periodic refresh ─────────────────────────────────────────────
+// -- Periodic refresh ----
 setInterval(loadAgentList, 5000);
+setInterval(loadTasks, 10000);
 loadAgentList();
 </script>
 

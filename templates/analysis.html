@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Analysis -- Super Agent</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0d1117;color:#c9d1d9;font-size:14px}
+.header{background:#161b22;border-bottom:1px solid #30363d;padding:12px 20px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:100}
+.header h1{font-size:18px;color:#58a6ff}
+.header .nav-links{display:flex;gap:12px}
+.header .nav-links a{color:#8b949e;text-decoration:none;font-size:12px}
+.header .nav-links a:hover{color:#e6edf3}
+.container{max-width:1200px;margin:0 auto;padding:20px}
+.section-title{font-size:15px;color:#58a6ff;margin:24px 0 12px;font-weight:600;border-bottom:1px solid #21262d;padding-bottom:6px}
+.analytics-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-bottom:20px}
+.analytics-card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px 20px}
+.analytics-card .label{font-size:11px;color:#8b949e;text-transform:uppercase;letter-spacing:0.5px}
+.analytics-card .value{font-size:28px;font-weight:700;color:#e6edf3;margin-top:4px}
+.analytics-card .sub{font-size:11px;color:#484f58;margin-top:2px}
+.analytics-card .value.green{color:#3fb950}
+.analytics-card .value.red{color:#f85149}
+.analytics-card .value.yellow{color:#d29922}
+.analytics-card .value.blue{color:#58a6ff}
+.comp-table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:20px}
+.comp-table th{text-align:left;padding:10px 12px;background:#161b22;color:#8b949e;border-bottom:2px solid #30363d;font-weight:600;position:sticky;top:0}
+.comp-table td{padding:8px 12px;border-bottom:1px solid #21262d;color:#c9d1d9}
+.comp-table tr:hover{background:#1c2128}
+.comp-table .num{text-align:right;font-family:monospace}
+.comp-table .num.green{color:#3fb950}
+.comp-table .num.red{color:#f85149}
+.comp-table .num.yellow{color:#d29922}
+.status-dot-sm{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:6px}
+.empty-state{padding:60px;text-align:center;color:#484f58;font-size:15px}
+.score-spark{display:flex;gap:3px;align-items:flex-end;height:40px;padding:8px 0}
+.score-bar{width:8px;border-radius:2px;min-height:4px;transition:height .3s}
+.score-bar.high{background:#3fb950}
+.score-bar.mid{background:#d29922}
+.score-bar.low{background:#f85149}
+.task-bar{display:flex;height:10px;border-radius:5px;overflow:hidden;margin:12px 0}
+.task-bar .seg.green{background:#3fb950}
+.task-bar .seg.yellow{background:#d29922}
+.task-bar .seg.red{background:#f85149}
+.legend{display:flex;gap:20px;font-size:11px;color:#8b949e;margin:8px 0}
+.legend span{display:flex;align-items:center;gap:6px}
+.legend .swatch{width:10px;height:10px;border-radius:2px;display:inline-block}
+.recent-list{display:grid;gap:6px}
+.recent-item{padding:8px 12px;border:1px solid #21262d;border-radius:6px;font-size:12px;background:#161b22}
+.recent-item .action{color:#c9d1d9;font-family:monospace;font-size:11px}
+.recent-item .meta{font-size:10px;color:#484f58;margin-top:4px}
+.perf-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid #21262d;font-size:12px}
+::-webkit-scrollbar{width:8px}
+::-webkit-scrollbar-track{background:#0d1117}
+::-webkit-scrollbar-thumb{background:#30363d;border-radius:4px}
+::-webkit-scrollbar-thumb:hover{background:#484f58}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>** Agent Analysis</h1>
+  <div class="nav-links">
+    <a href="/">&lt;- Dashboard</a>
+    <a href="/analysis" style="color:#58a6ff">Analysis</a>
+  </div>
+</div>
+
+<div class="container">
+  <div class="analytics-grid" id="system-stats">
+    <div class="analytics-card"><div class="label">Total Agents</div><div class="value blue" id="stat-total">--</div></div>
+    <div class="analytics-card"><div class="label">Running</div><div class="value green" id="stat-running">--</div></div>
+    <div class="analytics-card"><div class="label">Total Cycles</div><div class="value blue" id="stat-cycles">--</div></div>
+    <div class="analytics-card"><div class="label">Total Experiences</div><div class="value blue" id="stat-experiences">--</div></div>
+    <div class="analytics-card"><div class="label">Tasks Completed</div><div class="value green" id="stat-tasks-done">--</div></div>
+    <div class="analytics-card"><div class="label">Tasks Impossible</div><div class="value red" id="stat-tasks-fail">--</div></div>
+  </div>
+
+  <div class="section-title">Agent Comparison</div>
+  <div style="overflow-x:auto" id="comp-table-wrap"><div class="empty-state">Loading...</div></div>
+
+  <div class="section-title" id="detail-title" style="display:none">Agent Detail</div>
+  <div id="agent-detail"></div>
+</div>
+
+<script>
+function fetchJSON(u){return fetch(u).then(r=>r.json())}
+function escapeHTML(s){if(!s)return '';return s.replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]})}
+
+async function loadAll(){
+  const [comp, agents] = await Promise.all([
+    fetchJSON('/api/analysis/agents'),
+    fetchJSON('/api/agents'),
+  ]);
+
+  // System stats
+  let totalRun=0, totalCycles=0, totalExp=0, tasksDone=0, tasksFail=0;
+  comp.forEach(a => {
+    if(a.status==='running') totalRun++;
+    totalCycles += a.cycles;
+    totalExp += a.experiences;
+    tasksDone += a.tasks_completed;
+    tasksFail += a.tasks_impossible;
+  });
+  document.getElementById('stat-total').textContent = comp.length;
+  document.getElementById('stat-running').textContent = totalRun;
+  document.getElementById('stat-cycles').textContent = totalCycles;
+  document.getElementById('stat-experiences').textContent = totalExp;
+  document.getElementById('stat-tasks-done').textContent = tasksDone;
+  document.getElementById('stat-tasks-fail').textContent = tasksFail;
+
+  // Comparison table
+  let html = '<table class="comp-table"><tr>'+
+    '<th>Agent</th><th>Status</th><th class="num">Cycles</th><th class="num">Success</th><th class="num">Fail</th>'+
+    '<th class="num">Rate</th><th class="num">Exp</th><th class="num">TasksOK</th><th class="num">Tasks.</th><th class="num">TasksFAIL</th>'+
+    '<th>Last Critic</th><th>Last Supervisor</th></tr>';
+  comp.forEach(a => {
+    const color = a.status==='running'?'#3fb950':a.status==='idle'?'#d29922':'#f85149';
+    const rate = a.cycles>0 ? Math.round(a.successes/a.cycles*100)+'%' : '--';
+    html += '<tr onclick="showAgentDetail(\''+escapeHTML(a.name)+'\')" style="cursor:pointer">'+
+      '<td><span class="status-dot-sm" style="background:'+color+'"></span>'+escapeHTML(a.name)+'</td>'+
+      '<td>'+a.status+'</td>'+
+      '<td class="num">'+a.cycles+'</td>'+
+      '<td class="num green">'+a.successes+'</td>'+
+      '<td class="num red">'+a.failures+'</td>'+
+      '<td class="num '+(parseInt(rate)>=50?'green':'yellow')+'">'+rate+'</td>'+
+      '<td class="num">'+a.experiences+'</td>'+
+      '<td class="num green">'+a.tasks_completed+'</td>'+
+      '<td class="num yellow">'+a.tasks_pending+'</td>'+
+      '<td class="num red">'+a.tasks_impossible+'</td>'+
+      '<td style="font-size:10px;color:#a78bfa">'+(a.last_critic?a.last_critic.slice(11,19):'--')+'</td>'+
+      '<td style="font-size:10px;color:#60a5fa">'+(a.last_supervisor?a.last_supervisor.slice(11,19):'--')+'</td></tr>';
+  });
+  html += '</table>';
+  document.getElementById('comp-table-wrap').innerHTML = html;
+}
+
+async function showAgentDetail(name){
+  document.getElementById('detail-title').style.display = 'block';
+  document.getElementById('detail-title').textContent = name + ' -- Deep Dive';
+  const el = document.getElementById('agent-detail');
+  el.innerHTML = '<div class="empty-state">Loading...</div>';
+  try {
+    const [a, r] = await Promise.all([
+      fetchJSON('/api/agent/'+name+'/analysis'),
+      fetchJSON('/api/agent/'+name+'/resources').catch(()=>null),
+    ]);
+    el.innerHTML = renderAgentDetail(a, name, r);
+  } catch(e) {
+    el.innerHTML = '<div class="empty-state">Failed: '+e.message+'</div>';
+  }
+}
+
+function renderAgentDetail(a, name, r){
+  const total = a.tasks_pending + a.tasks_completed + a.tasks_impossible;
+  const pct = total>0 ? Math.round(a.tasks_completed/total*100) : 0;
+  const succRate = a.cycles>0 ? Math.round(a.successes/a.cycles*100) : 0;
+
+  const maxScore = Math.max(...a.scores, 1);
+  const bars = a.scores.map(s => {
+    const cls = s>=7?'high':s>=4?'mid':'low';
+    const h = Math.max(4, Math.round(s/maxScore*36));
+    return '<div class="score-bar '+cls+'" style="height:'+h+'px" title="Score: '+s+'/10"></div>';
+  }).join('');
+
+  let html = '<div class="analytics-grid">'+
+    '<div class="analytics-card"><div class="label">Cycles</div><div class="value blue">'+a.cycles+'</div></div>'+
+    '<div class="analytics-card"><div class="label">Success Rate</div><div class="value '+(succRate>=50?'green':'yellow')+'">'+succRate+'%</div><div class="sub">'+a.successes+'OK / '+a.failures+'FAIL</div></div>'+
+    '<div class="analytics-card"><div class="label">Experiences</div><div class="value blue">'+a.experiences+'</div></div>'+
+    '<div class="analytics-card"><div class="label">Avg Critic Score</div><div class="value '+(a.avg_score>=7?'green':a.avg_score>=4?'yellow':'red')+'">'+(a.avg_score||'--')+'<span style="font-size:14px">/10</span></div></div>'+
+    (r ? '<div class="analytics-card"><div class="label">Balance</div><div class="value '+(r.balance>=0?'green':'red')+'">$'+(r.balance||0).toFixed(2)+'</div><div class="sub">Rev: $'+(r.total_revenue||0).toFixed(2)+' / Cost: $'+(r.total_costs||0).toFixed(2)+'</div></div>' : '')+
+    '</div>';
+
+  if(total>0){
+    const pw = Math.round(a.tasks_pending/total*100);
+    const cw = Math.round(a.tasks_completed/total*100);
+    const iw = Math.round(a.tasks_impossible/total*100);
+    html += '<div style="margin:12px 0"><strong style="color:#8b949e;font-size:12px">Tasks</strong>'+
+      '<div class="task-bar">'+
+      '<div class="seg green" style="width:'+cw+'%"></div>'+
+      '<div class="seg yellow" style="width:'+pw+'%"></div>'+
+      '<div class="seg red" style="width:'+iw+'%"></div></div>'+
+      '<div class="legend"><span><span class="swatch" style="background:#3fb950"></span>Completed: '+a.tasks_completed+'</span>'+
+      '<span><span class="swatch" style="background:#d29922"></span>Pending: '+a.tasks_pending+'</span>'+
+      '<span><span class="swatch" style="background:#f85149"></span>Impossible: '+a.tasks_impossible+'</span></div></div>';
+  }
+
+  if(a.scores && a.scores.length){
+    html += '<div style="margin:16px 0"><strong style="color:#8b949e;font-size:12px">Critic Score History ('+a.scores.length+' evals)</strong>'+
+      '<div class="score-spark">'+bars+'</div></div>';
+  }
+
+  if(a.recent_outputs && a.recent_outputs.length){
+    html += '<div style="margin:16px 0"><strong style="color:#8b949e;font-size:12px">Recent Experiences</strong>'+
+      '<div class="recent-list">';
+    a.recent_outputs.slice().reverse().forEach(e => {
+      html += '<div class="recent-item"><div class="action">'+(e.success?'OK ':'FAIL ')+escapeHTML(e.action||'')+'</div>'+
+        '<div class="meta">'+(e.timestamp||'')+'</div></div>';
+    });
+    html += '</div></div>';
+  }
+
+  if(r){
+    html += '<div class="section-title" style="font-size:13px">Resource Bank</div>'+
+      '<div class="analytics-grid">'+
+      '<div class="analytics-card"><div class="label">Capabilities</div><div class="value" style="font-size:14px">'+(r.capabilities?Object.keys(r.capabilities).length:0)+'</div><div class="sub">'+(r.capabilities?Object.entries(r.capabilities).filter(([,v])=>v).map(([k])=>k).join(', '):'none')+'</div></div>'+
+      '<div class="analytics-card"><div class="label">Accounts</div><div class="value" style="font-size:14px">'+(r.accounts?Object.keys(r.accounts).length:0)+'</div><div class="sub">'+(r.accounts?Object.entries(r.accounts).map(([k,v])=>k+'('+v+')').join(', '):'none')+'</div></div>'+
+      '<div class="analytics-card"><div class="label">Tools</div><div class="value" style="font-size:14px">'+(r.tools?Object.keys(r.tools).length:0)+'</div><div class="sub">'+(r.tools?Object.entries(r.tools).filter(([,v])=>v).map(([k])=>k).join(', '):'none')+'</div></div>'+
+      '</div>';
+    if(r.income_log && r.income_log.length){
+      html += '<div style="margin:12px 0"><strong style="color:#8b949e;font-size:12px">Income Log</strong><div class="recent-list">';
+      r.income_log.slice().reverse().forEach(i => {
+        html += '<div class="recent-item"><span style="color:#3fb950">+$'+i.amount.toFixed(2)+'</span> -- '+escapeHTML(i.source)+' <span style="color:#484f58;font-size:10px">'+(i.timestamp||'').slice(11,19)+'</span></div>';
+      });
+      html += '</div></div>';
+    }
+    if(r.expense_log && r.expense_log.length){
+      html += '<div style="margin:12px 0"><strong style="color:#8b949e;font-size:12px">Expense Log</strong><div class="recent-list">';
+      r.expense_log.slice().reverse().forEach(e => {
+        html += '<div class="recent-item"><span style="color:#f85149">-$'+e.amount.toFixed(2)+'</span> -- '+escapeHTML(e.purpose)+' <span style="color:#484f58;font-size:10px">'+(e.timestamp||'').slice(11,19)+'</span></div>';
+      });
+      html += '</div></div>';
+    }
+  }
+
+  if(a.revisions && a.revisions.length){
+    html += '<div style="margin:16px 0"><strong style="color:#8b949e;font-size:12px">Supervisor Revisions ('+a.revisions.length+')</strong>';
+    a.revisions.slice().reverse().forEach(r => {
+      html += '<div class="recent-item" style="padding:6px 10px"><span style="color:#60a5fa">S</span> '+(r.created_at||'').slice(11,19)+' -- '+r.input_len+' chars instruction</div>';
+    });
+    html += '</div>';
+  }
+
+  return html;
+}
+
+loadAll();
+setInterval(loadAll, 8000);
+</script>
+</body>
+</html>

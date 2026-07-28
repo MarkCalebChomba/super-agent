@@ -10,15 +10,12 @@ openai>=1.0.0
 beautifulsoup4>=4.12.2
 curl-cffi>=0.5.10
 
-# Anti-detection browser (primary - best for agent stealth)
-camoufox>=0.1.0
-
-# Fallback browser automation (if camoufox unavailable)
+# Browser automation (headless, anti-detection)
 playwright>=1.40.0
 playwright-stealth>=1.0.6
 
 # Resource monitoring
 psutil>=5.9.0
 
-# Testing
-pytest>=8.0.0
+# HF persistent storage (data survives Railway deploys)
+huggingface_hub>=0.23.0

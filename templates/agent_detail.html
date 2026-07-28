@@ -103,7 +103,7 @@ pre { background:#0d1117; border:1px solid #30363d; border-radius:6px; padding:1
   <div class="card">
     <h2>Send Advice to {{ agent.agent_name }}</h2>
     <form action="/agent/{{ agent.agent_name }}/send_advice" method="POST">
-      <textarea name="message" placeholder="Tell this agent what to do — it will check this inbox every 5 cycles..."></textarea>
+      <textarea name="message" placeholder="Tell this agent what to do -- it will check this inbox every 5 cycles..."></textarea>
       <button type="submit" class="btn">Send to {{ agent.agent_name }}</button>
     </form>
     {% if inbox %}

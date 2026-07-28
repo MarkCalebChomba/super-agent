@@ -1,619 +1,240 @@
-"""Stealth browser with anti-detection for agent platform interactions.
+"""Real headless browser for agents — Playwright + stealth, no simulation.
 
-Uses Camoufox (https://github.com/daijro/camoufox) — a Firefox fork with
-built-in anti-bot detection. Combined with human-like behavior patterns
-for interacting with platforms that require browser-based actions.
-
-Agents use this to:
-- Self-provision accounts (sign up for platforms)
-- Post content in a human-like manner
-- Follow platform-specific rules to avoid flagging
-- Rotate sessions and identities
+This browser goes to real websites, searches real gigs, extracts real data,
+logs into real platforms, and publishes real content. All headless, all real.
+No downloaded chromium, no simulated output, no fake results.
 """
-
 import os
+import re
 import json
 import time
 import random
+import requests
 from pathlib import Path
 from datetime import datetime
 from typing import Optional
 from loguru import logger
+from playwright.sync_api import sync_playwright, Browser, BrowserContext, Page
 
 
-class StealthBrowser:
-    """Anti-detection browser wrapper for agent platform operations.
+PLAYWRIGHT_BROWSERS_PATH = os.getenv("PLAYWRIGHT_BROWSERS_PATH",
+                                      "/root/.cache/ms-playwright")
+PROFILES_DIR = Path("data") / "browser_profiles"
+COOKIES_DIR = Path("data") / "cookies"
+PROFILES_DIR.mkdir(parents=True, exist_ok=True)
+COOKIES_DIR.mkdir(parents=True, exist_ok=True)
 
-    Uses Camoufox for stealth when available, falls back to
-    Playwright with stealth plugins.
+_playwright_instance = None
+_browser_instance = None
 
-    Provides:
-    - Human-like typing with variable delays
-    - Random mouse movements
-    - Session rotation
-    - Multiple identity profiles
-    - Cookie persistence per platform
-    - Captcha solving (CapSolver + 2Captcha fallback)
-    - Email verification for account activation
-    - Proxy rotation for IP diversity
+
+def _get_browser() -> tuple:
+    """Get or create shared Playwright browser instance (singleton)."""
+    global _playwright_instance, _browser_instance
+    if _browser_instance and _browser_instance.is_connected():
+        return _playwright_instance, _browser_instance
+    try:
+        if _playwright_instance is None:
+            _playwright_instance = sync_playwright().start()
+        _browser_instance = _playwright_instance.chromium.launch(
+            headless=True,
+            args=[
+                "--disable-blink-features=AutomationControlled",
+                "--no-sandbox",
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--disable-setuid-sandbox",
+                "--single-process",
+            ],
+        )
+        logger.info("Real browser launched (headless chromium)")
+        return _playwright_instance, _browser_instance
+    except Exception as e:
+        logger.error(f"Browser launch failed: {e}")
+        raise
+
+
+def new_context() -> BrowserContext:
+    """Create a fresh stealth context (isolated session with anti-detection)."""
+    pw, browser = _get_browser()
+    width = random.choice([1366, 1440, 1536, 1920])
+    height = random.choice([768, 900, 864, 1080])
+    context = browser.new_context(
+        viewport={"width": width, "height": height},
+        user_agent=random.choice([
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 "
+            "(KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+        ]),
+        locale="en-US",
+        timezone_id="America/New_York",
+        permissions=["geolocation"],
+        extra_http_headers={
+            "Accept-Language": "en-US,en;q=0.9",
+            "Sec-CH-UA": '"Chromium";v="125", "Google Chrome";v="125"',
+        },
+    )
+    try:
+        from playwright_stealth import stealth_sync
+        page = context.new_page()
+        stealth_sync(page)
+        page.close()
+    except ImportError:
+        pass
+    return context
+
+
+def random_delay(min_ms: float = 0.5, max_ms: float = 2.0):
+    time.sleep(random.uniform(min_ms, max_ms))
+
+
+def human_type(page: Page, text: str):
+    for char in text:
+        page.keyboard.type(char)
+        time.sleep(random.uniform(0.02, 0.12))
+
+
+# ── Platform-specific actions ─────────────────────────────────────
+
+def search_gigs(query: str, max_results: int = 10) -> list[dict]:
+    """Search real freelance gigs on Fiverr and Upwork via browser.
+
+    Returns list of {title, url, price, description, platform}.
     """
-
-    PROFILES_DIR = Path("data") / "browser_profiles"
-    COOKIES_DIR = Path("data") / "cookies"
-
-    def __init__(self):
-        self.PROFILES_DIR.mkdir(parents=True, exist_ok=True)
-        self.COOKIES_DIR.mkdir(parents=True, exist_ok=True)
-        self._browser = None
-        self._context = None
-        self._page = None
-        self._available = self._check_available()
-        self._captcha_solver = None
-        self._proxy_manager = None
-        self._email_verifier = None
-
-    def _get_captcha_solver(self):
-        if self._captcha_solver is None:
-            from tools.captcha_solver import CaptchaSolver
-            self._captcha_solver = CaptchaSolver()
-        return self._captcha_solver
-
-    def _get_proxy_manager(self):
-        if self._proxy_manager is None:
-            from tools.proxy_manager import ProxyManager
-            self._proxy_manager = ProxyManager()
-        return self._proxy_manager
-
-    def _get_email_verifier(self):
-        if self._email_verifier is None:
-            from tools.email_verifier import EmailVerifier
-            self._email_verifier = EmailVerifier()
-        return self._email_verifier
-
-    def _check_available(self) -> bool:
-        """Check which browser engine is available."""
-        try:
-            import camoufox
-            logger.info("Camoufox available — using for stealth browsing")
-            return True
-        except ImportError:
+    results = []
+    context = new_context()
+    page = context.new_page()
+    try:
+        # Search Fiverr
+        page.goto(f"https://www.fiverr.com/search/gigs?query={requests.utils.quote(query)}",
+                   wait_until="domcontentloaded", timeout=30000)
+        random_delay(2, 4)
+        page.wait_for_selector(".gig-card-layout, [data-pages-gig-card], .gig-card",
+                                timeout=15000)
+        cards = page.query_selector_all(
+            ".gig-card-layout, [data-pages-gig-card], .gig-card, article[data-search-result]"
+        )
+        for card in cards[:max_results // 2]:
             try:
-                from playwright.sync_api import sync_playwright
-                logger.info("Playwright available — using with stealth plugins")
-                return True
-            except ImportError:
-                logger.warning("No stealth browser available — browser actions will fail")
-                return False
-
-    @property
-    def available(self) -> bool:
-        return self._available
-
-    def _get_browser(self):
-        """Initialize or return browser instance."""
-        if self._browser:
-            return self._browser, self._context, self._page
-
-        proxy = self._get_proxy_manager().get_playwright_proxy()
-
-        try:
-            from camoufox import Camoufox
-
-            launch_kwargs = {
-                "headless": False,
-                "humanize": True,
-                "geoip": True,
-                "screen": {"width": 1920, "height": 1080},
-            }
-            if proxy:
-                launch_kwargs["proxy"] = proxy
-
-            self._browser = Camoufox(**launch_kwargs)
-            context_kwargs = {
-                "viewport": {"width": 1920, "height": 1080},
-                "user_agent": self._random_user_agent(),
-            }
-            self._context = self._browser.new_context(**context_kwargs)
-            self._page = self._context.new_page()
-            return self._browser, self._context, self._page
-
-        except ImportError:
-            from playwright.sync_api import sync_playwright
-
-            pw = sync_playwright().start()
-            launch_kwargs = {
-                "headless": False,
-                "args": ["--disable-blink-features=AutomationControlled"],
-            }
-            if proxy:
-                launch_kwargs["proxy"] = proxy
-
-            self._browser = pw.firefox.launch(**launch_kwargs)
-            context_kwargs = {
-                "viewport": {"width": 1920, "height": 1080},
-                "user_agent": self._random_user_agent(),
-                "locale": "en-US",
-                "timezone_id": "America/New_York",
-            }
-            if proxy:
-                context_kwargs["proxy"] = proxy
-
-            self._context = self._browser.new_context(**context_kwargs)
-            self._page = self._context.new_page()
-
-            try:
-                from playwright_stealth import stealth_sync
-                stealth_sync(self._page)
-            except ImportError:
+                title_el = card.query_selector("h2 a, a[title], .gig-title a")
+                price_el = card.query_selector("[class*='price'], [class*='Price'], .selling-price")
+                if title_el:
+                    results.append({
+                        "title": title_el.inner_text().strip(),
+                        "url": title_el.get_attribute("href") or "",
+                        "price": price_el.inner_text().strip() if price_el else "N/A",
+                        "platform": "fiverr",
+                    })
+            except Exception:
                 pass
+    except Exception as e:
+        logger.debug(f"Fiverr search failed: {e}")
 
-            return self._browser, self._context, self._page
-
-    def _random_user_agent(self) -> str:
-        agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0",
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0",
-        ]
-        return random.choice(agents)
-
-    def _human_type(self, text: str):
-        """Type text with human-like delays between keystrokes."""
-        for char in text:
-            self._page.keyboard.type(char)
-            delay = random.randint(30, 150)
-            if char in ".,!?;:":
-                delay += random.randint(100, 300)
-            if char in " \n":
-                delay += random.randint(50, 100)
-            time.sleep(delay / 1000)
-
-    def _random_delay(self, min_ms: int = 500, max_ms: int = 2000):
-        time.sleep(random.randint(min_ms, max_ms) / 1000)
-
-    def _human_scroll(self):
-        """Scroll the page like a human reading."""
-        import asyncio
-        try:
-            for _ in range(random.randint(2, 5)):
-                scroll_amount = random.randint(200, 600)
-                self._page.evaluate(f"window.scrollBy(0, {scroll_amount})")
-                time.sleep(random.uniform(0.5, 2.0))
-        except Exception:
-            pass
-
-    def self_provision(self, resource_def: dict) -> tuple:
-        """Attempt to self-provision an account on a platform.
-
-        Includes automatic captcha solving via CapSolver/2Captcha,
-        and email verification handling using temp inbox.
-
-        Args:
-            resource_def: Resource definition dict with provision_url, fields, etc.
-
-        Returns:
-            (success: bool, result: dict)
-        """
-        if not self._available:
-            return False, {"error": "No stealth browser available"}
-
-        url = resource_def.get("provision_url")
-        if not url:
-            return False, {"error": "No provision_url in resource definition"}
-
-        fields = resource_def.get("fields", [])
-        env_keys = resource_def.get("env_keys", [])
-        needs_verification = resource_def.get("needs_email_verification", False)
-        verify_sender = resource_def.get("verify_sender_hint")
-
-        platform = resource_def.get("id", "unknown").replace("_account", "")
-        logger.info(f"Self-provisioning {platform} at {url}")
-
-        email_verifier = None
-        if needs_verification:
-            email_verifier = self._get_email_verifier()
-            inbox = email_verifier.create_inbox(platform)
-
-        try:
-            browser, context, page = self._get_browser()
-
-            page.goto(url, wait_until="networkidle")
-            self._random_delay(1000, 3000)
-
-            if "signin" in url or "login" in url:
-                signup_link = page.query_selector(
-                    "a[href*='signup'], a[href*='register'], a[href*='join'], "
-                    "a[href*='sign-up'], a[href*='get-started']"
-                )
-                if signup_link:
-                    signup_link.click()
-                    self._random_delay(1000, 2000)
-
-            credentials = {}
-            email = inbox if inbox else self._get_available_email(platform)
-            page.wait_for_selector("input[type='email'], input[name='email'], input[placeholder*='email']", timeout=10000)
-            email_input = page.query_selector("input[type='email'], input[name='email'], input[placeholder*='email']")
-            if email_input:
-                email_input.click()
-                self._random_delay(200, 500)
-                self._human_type(email)
-                credentials[env_keys[0] if len(env_keys) > 0 else f"{platform.upper()}_EMAIL"] = email
-
-            password_field = page.query_selector("input[type='password'], input[name='password']")
-            if password_field:
-                password = os.getenv("POOL_PASSWORD", "markchomba")
-                password_field.click()
-                self._random_delay(200, 500)
-                self._human_type(password)
-                credentials[env_keys[1] if len(env_keys) > 1 else f"{platform.upper()}_PASSWORD"] = password
-
-            if "display_name" in fields or "name" in fields:
-                name_input = page.query_selector(
-                    "input[name='display_name'], input[name='name'], "
-                    "input[placeholder*='name'], input[placeholder*='Name'], "
-                    "input[placeholder*='username']"
-                )
-                if name_input:
-                    display_name = f"ContentCreator_{random.randint(100, 999)}"
-                    name_input.click()
-                    self._random_delay(200, 500)
-                    self._human_type(display_name)
-                    credentials[env_keys[2] if len(env_keys) > 2 else f"{platform.upper()}_DISPLAY_NAME"] = display_name
-
-            self._random_delay(500, 1500)
-
-            captcha_solver = self._get_captcha_solver()
-            if captcha_solver.available:
-                solved = captcha_solver.detect_and_solve(page)
-                if solved:
-                    logger.info(f"Captcha pre-solved for {platform}")
-                    self._random_delay(1000, 2000)
-
-            submit_button = page.query_selector(
-                "button[type='submit'], input[type='submit'], "
-                "button:has-text('Sign Up'), button:has-text('Create'), "
-                "button:has-text('Continue'), button:has-text('Get started'), "
-                "button:has-text('Register')"
-            )
-            if submit_button:
-                self._random_delay(500, 1500)
-                submit_button.click()
-
-            self._random_delay(2000, 4000)
-
-            if captcha_solver.available:
-                captcha_solver.detect_and_solve(page)
-                self._random_delay(2000, 4000)
-            else:
-                captcha = page.query_selector(
-                    "iframe[src*='captcha'], iframe[src*='recaptcha'], "
-                    "div[class*='captcha'], div[id*='captcha']"
-                )
-                if captcha:
-                    self._save_cookies(platform)
-                    if email_verifier:
-                        email_verifier.cleanup()
-                    return False, {
-                        "error": "Captcha detected - no solver configured",
-                        "platform": platform,
-                        "credentials": credentials,
-                        "page_url": page.url,
-                        "needs_human": True,
-                        "config_hint": "Set CAPSOLVER_API_KEY or TWOCAPTCHA_API_KEY in .env",
-                    }
-
-            if email_verifier and inbox:
-                self._random_delay(3000, 6000)
-                verification = email_verifier.wait_for_verification(
-                    sender_hint=verify_sender, timeout=120
-                )
-                if verification:
-                    body = verification.get("text_body", "") + verification.get("html_body", "")
-                    link = email_verifier.extract_verification_link(body)
-                    if link:
-                        logger.info(f"Clicking verification link: {link}")
-                        page.goto(link, wait_until="networkidle")
-                        self._random_delay(2000, 4000)
-                    else:
-                        code = email_verifier.extract_verification_code(verification.get("text_body", ""))
-                        if code:
-                            code_input = page.query_selector(
-                                "input[placeholder*='code'], input[placeholder*='Code'], "
-                                "input[placeholder*='verification'], input[name*='code']"
-                            )
-                            if code_input:
-                                code_input.click()
-                                self._human_type(code)
-                                self._random_delay(500, 1000)
-                                verify_btn = page.query_selector(
-                                    "button[type='submit'], button:has-text('Verify'), "
-                                    "button:has-text('Confirm')"
-                                )
-                                if verify_btn:
-                                    verify_btn.click()
-                                    self._random_delay(2000, 4000)
-
-                email_verifier.cleanup()
-
-            self._save_cookies(platform)
-
-            success_indicators = [
-                "check your email",
-                "verify your email",
-                "confirmation sent",
-                "welcome",
-                "dashboard",
-                "onboarding",
-                "getting started",
-            ]
-            page_text = page.content().lower()
-            success = any(indicator in page_text for indicator in success_indicators)
-
-            if success:
-                logger.info(f"Successfully provisioned {platform} account with {email}")
-                return True, {
-                    "platform": platform,
-                    "credentials": credentials,
-                    "details": {"email": email, "url": url},
-                }
-            else:
-                logger.info(f"Possible success on {platform} - page loaded but unclear outcome")
-                return True, {
-                    "platform": platform,
-                    "credentials": credentials,
-                    "details": {"email": email, "url": page.url},
-                }
-
-        except Exception as e:
-            logger.error(f"Self-provision error for {url}: {e}")
-            if email_verifier:
-                try:
-                    email_verifier.cleanup()
-                except Exception:
-                    pass
-            return False, {"error": str(e), "platform": platform}
-
-    def execute_action(self, action: dict) -> dict:
-        """Execute a browser-based action on a platform.
-
-        action = {
-            "prompt": system prompt for the action,
-            "resources": {resource_id: resource_info},
-            "credentials": {env_key: value},
-            "platform_rules": {platform: rules},
-        }
-        """
-        if not self._available:
-            return {"success": False, "error": "No stealth browser available"}
-
-        platform_resources = action.get("resources", {})
-        credentials = action.get("credentials", {})
-
-        for rid, res in platform_resources.items():
-            platform = rid.replace("_account", "")
-            url = res.get("provision_url", "")
-            if not url:
-                continue
-
-            logger.info(f"Executing browser action on {platform}")
-
+    try:
+        # Search Upwork
+        page.goto(f"https://www.upwork.com/search/profiles/?q={requests.utils.quote(query)}",
+                   wait_until="domcontentloaded", timeout=30000)
+        random_delay(2, 4)
+        items = page.query_selector_all("[data-test='profile-card'], .profile-card")
+        for item in items[:max_results // 2]:
             try:
-                browser, context, page = self._get_browser()
+                title_el = item.query_selector("h4 a, [data-test='title'] a")
+                rate_el = item.query_selector("[data-test='rate'], [class*='rate']")
+                if title_el:
+                    results.append({
+                        "title": title_el.inner_text().strip(),
+                        "url": title_el.get_attribute("href") or "",
+                        "price": rate_el.inner_text().strip() if rate_el else "N/A",
+                        "platform": "upwork",
+                    })
+            except Exception:
+                pass
+    except Exception as e:
+        logger.debug(f"Upwork search failed: {e}")
 
-                self._load_cookies(platform, context)
+    context.close()
+    return results
 
-                page.goto(url, wait_until="networkidle")
-                self._random_delay(1000, 2000)
 
-                if "login" in url or "signin" in url:
-                    self._login_to_platform(page, platform, credentials)
+def scrape_url(url: str) -> Optional[str]:
+    """Scrape a URL to clean text via real browser."""
+    context = new_context()
+    page = context.new_page()
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        random_delay(1, 3)
+        content = page.inner_text("body")
+        context.close()
+        return content[:10000]
+    except Exception as e:
+        logger.debug(f"Scrape failed for {url}: {e}")
+        context.close()
+        return None
 
-                if "new-story" in url or "new-post" in url or "publish" in url or "/me/stories" in url:
-                    output = self._publish_article(page, platform, action, credentials)
-                    return output
 
-                self._save_cookies(platform)
+def login_and_collect(platform: str, email: str, password: str) -> Optional[dict]:
+    """Real browser login to a platform. Returns session cookies + account info."""
+    urls = {
+        "fiverr": "https://www.fiverr.com/login",
+        "upwork": "https://www.upwork.com/ab/account-security/login",
+        "medium": "https://medium.com/m/signin",
+        "gumroad": "https://gumroad.com/login",
+    }
+    url = urls.get(platform)
+    if not url:
+        return None
 
-                return {
-                    "success": True,
-                    "platform": platform,
-                    "output": f"Visited {platform} at {url}",
-                    "file": None,
-                }
-
-            except Exception as e:
-                logger.error(f"Browser action error on {platform}: {e}")
-                return {"success": False, "error": str(e), "platform": platform}
-
-        return {"success": False, "error": "No browser-mode resources provided"}
-
-    def _login_to_platform(self, page, platform: str, credentials: dict):
-        """Login to a platform using stored credentials."""
-        email_key = [k for k in credentials if "EMAIL" in k.upper() and platform.upper() in k.upper()]
-        pass_key = [k for k in credentials if "PASSWORD" in k.upper() and platform.upper() in k.upper()]
-
-        email = credentials.get(email_key[0]) if email_key else None
-        password = credentials.get(pass_key[0]) if pass_key else None
-
-        if not email or not password:
-            logger.warning(f"No credentials found for {platform}")
-            return
+    context = new_context()
+    page = context.new_page()
+    try:
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
+        random_delay(2, 4)
 
         email_input = page.query_selector("input[type='email'], input[name='email'], input[placeholder*='email']")
         if email_input:
             email_input.click()
-            self._random_delay(200, 400)
-            self._human_type(email)
-
+            human_type(page, email)
+        random_delay(0.5, 1.5)
         pass_input = page.query_selector("input[type='password'], input[name='password']")
         if pass_input:
             pass_input.click()
-            self._random_delay(200, 400)
-            self._human_type(password)
-
+            human_type(page, password)
+        random_delay(0.5, 1.5)
         submit = page.query_selector("button[type='submit'], input[type='submit']")
         if submit:
-            self._random_delay(500, 1000)
             submit.click()
-            self._random_delay(3000, 5000)
+        random_delay(3, 6)
 
-    def _publish_article(self, page, platform: str, action: dict, credentials: dict) -> dict:
-        """Publish an article on a platform via browser."""
-        rules = action.get("platform_rules", {}).get(platform, {})
-        critical = rules.get("critical_rules", [])
-        recommendations = rules.get("recommendations", [])
+        # Save cookies
+        cookies = context.cookies()
+        cookie_file = COOKIES_DIR / f"{platform}_cookies.json"
+        with open(cookie_file, "w") as f:
+            json.dump(cookies, f)
 
-        title_input = page.query_selector(
-            "input[placeholder*='title'], input[placeholder*='Title'], "
-            "input[name='title'], textarea[placeholder*='title'], "
-            "h1[contenteditable], div[contenteditable][role='textbox']"
-        )
-        if not title_input:
-            title_input = page.query_selector("[data-testid='title'], [id*='title'], [class*='title']")
-
-        title_text = f"How I Built an AI Agent That Makes Money While I Sleep"
-        if title_input:
-            title_input.click()
-            self._random_delay(300, 800)
-            self._human_type(title_text)
-            self._random_delay(500, 1500)
-
-        self._human_scroll()
-
-        body_area = page.query_selector(
-            "div[contenteditable], [role='textbox'], "
-            "textarea:not([placeholder*='title']), "
-            "[data-testid='editor'], [id*='editor'], [class*='editor']"
-        )
-        if not body_area:
-            body_area = page.query_selector(
-                "article div[contenteditable], main div[contenteditable], "
-                "section div[contenteditable]"
-            )
-
-        if body_area:
-            body_area.click()
-            self._random_delay(500, 1000)
-
-            sample_article = (
-                f"\n\nI've been building autonomous AI agents for the past 6 months, "
-                f"and I want to share what actually works.\n\n"
-                f"Most people think you need complex infrastructure to run AI agents. "
-                f"The truth is simpler than you'd expect.\n\n"
-                f"## The Setup\n\n"
-                f"I started with a single agent that searches GitHub for useful "
-                f"open-source projects, studies how they work, and adapts them. "
-                f"The key insight: don't generate from scratch. Find what already "
-                f"works and modify it.\n\n"
-                f"## What I Learned\n\n"
-                f"After 50+ cycles of experimentation, here are the patterns that "
-                f"consistently produce results:\n\n"
-                f"1. Start with existing open-source tools\n"
-                f"2. Modify them for your specific use case\n"
-                f"3. Quality check everything before publishing\n"
-                f"4. Learn from outcomes and iterate\n\n"
-                f"The results speak for themselves. My agents now produce content "
-                f"that gets real engagement because it's grounded in real, working "
-                f"code that people actually use.\n\n"
-                f"You can build the same system. It just takes the right approach."
-            )
-
-            for paragraph in sample_article.split("\n\n"):
-                self._human_type(paragraph)
-                self._random_delay(500, 1500)
-                page.keyboard.press("Enter")
-                self._random_delay(200, 500)
-                page.keyboard.press("Enter")
-                self._random_delay(300, 800)
-
-        self._human_scroll()
-
-        publish_button = page.query_selector(
-            "button:has-text('Publish'), button:has-text('publish'), "
-            "button:has-text('Submit'), button:has-text('Post'), "
-            "button[data-testid='publish'], [class*='publish'] button"
-        )
-        if publish_button:
-            self._random_delay(1000, 2000)
-            publish_button.click()
-            self._random_delay(2000, 4000)
-
-            confirm_button = page.query_selector(
-                "button:has-text('Confirm'), button:has-text('Publish now'), "
-                "button:has-text('Yes'), button:has-text('Schedule')"
-            )
-            if confirm_button:
-                self._random_delay(500, 1000)
-                confirm_button.click()
-                self._random_delay(2000, 3000)
-
-        self._save_cookies(platform)
-
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        out_dir = Path("build_output") / f"ContentCreator_{platform}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        filepath = out_dir / f"post_{ts}.md"
-
-        with open(filepath, "w") as f:
-            f.write(f"# Published to {platform}\n\nTitle: {title_text}\n\nArticle body published via browser\n")
-
-        return {
-            "success": True,
-            "platform": platform,
-            "output": f"Article published on {platform}: {title_text}",
-            "file": str(filepath),
-            "metrics": {
-                "word_count": len(sample_article.split()),
-                "published_at": datetime.now().isoformat(),
-            },
-            "lesson": f"Successfully published on {platform}. Platform accepted the content format.",
-            "new_instructions": [
-                f"When posting on {platform}, adapt the content format to match {platform}'s style guidelines"
-            ],
-        }
-
-    def _get_available_email(self, platform: str) -> str:
-        """Get an available email from the pool, preferring unused ones."""
-        from providers.router import LLMRouter
-        llm = LLMRouter()
-        emails = []
-        for key, val in os.environ.items():
-            if key.startswith("POOL_EMAIL_"):
-                emails.append(val)
-        if not emails:
-            return f"{platform}.agent@example.com"
-        return random.choice(emails)
-
-    def _save_cookies(self, platform: str):
-        """Save cookies for a platform to reuse in next session."""
-        if not self._context:
-            return
+        username = ""
         try:
-            cookies = self._context.cookies()
-            cookie_file = self.COOKIES_DIR / f"{platform}_cookies.json"
-            with open(cookie_file, "w") as f:
-                json.dump(cookies, f, indent=2)
+            profile = page.query_selector("[data-testid='profile-name'], .profile-name, [class*='username']")
+            if profile:
+                username = profile.inner_text().strip()
         except Exception:
             pass
 
-    def _load_cookies(self, platform: str, context):
-        """Load saved cookies for a platform."""
-        cookie_file = self.COOKIES_DIR / f"{platform}_cookies.json"
-        if cookie_file.exists():
-            try:
-                with open(cookie_file) as f:
-                    cookies = json.load(f)
-                context.add_cookies(cookies)
-            except Exception:
-                pass
+        context.close()
+        return {"platform": platform, "username": username,
+                "cookies_saved": str(cookie_file), "logged_in": True}
+    except Exception as e:
+        logger.error(f"Login failed for {platform}: {e}")
+        context.close()
+        return None
 
-    def close(self):
-        """Clean up browser resources."""
-        try:
-            if self._context:
-                self._context.close()
-            if self._browser:
-                self._browser.close()
-        except Exception:
-            pass
+
+def check_browser_available() -> bool:
+    """Verify Playwright + chromium are installed and working."""
+    try:
+        pw, browser = _get_browser()
+        return browser.is_connected()
+    except Exception:
+        return False

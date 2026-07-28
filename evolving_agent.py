@@ -60,6 +60,21 @@ class EvolvingAgent:
         self.memory = AgentMemory(agent_name, data_dir=str(self.DATA_DIR))
         self.orchestrator = AgentOrchestrator(self, self.memory)
 
+        # Assign an email from the pool
+        self._assign_email()
+
+        # Seed initial resource awareness
+        self._init_resource_bank()
+
+    def _assign_email(self):
+        """Assign one email to this agent from the shared pool."""
+        from email_pool import assign_email, get_email
+        self.email = get_email(self.name) or assign_email(self.name)
+        if self.email:
+            logger.info(f"{self.name} using email: {self.email}")
+        else:
+            logger.warning(f"{self.name} has no email — pool may be exhausted")
+
     def _load_or_init_instruction_set(self, seed_instruction: str = None):
         """Load instruction set from file or initialize from seed."""
         if self.instruction_path.exists():
@@ -111,6 +126,47 @@ class EvolvingAgent:
         if self.name not in self.resource_registry:
             self.resource_registry[self.name] = {}
             self._save_resource_registry()
+
+    def _init_resource_bank(self):
+        """Seed initial capabilities into the ResourceBank — real checks only."""
+        bank = self.orchestrator.resource_bank
+        bank.add_capability("llm_access", True, {"providers": ["hf", "nvidia"]})
+        bank.add_capability("web_search", True, {"method": "firecrawl+tavily"})
+
+        # Real browser check — actually test if Playwright works
+        browser_ok = False
+        try:
+            from tools.stealth_browser import check_browser_available
+            browser_ok = check_browser_available()
+        except Exception:
+            try:
+                from playwright.sync_api import sync_playwright
+                pw = sync_playwright().start()
+                b = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+                browser_ok = b.is_connected()
+                b.close()
+                pw.stop()
+            except Exception:
+                browser_ok = False
+
+        bank.add_capability("real_browser", browser_ok, {
+            "engine": "playwright_chromium" if browser_ok else "none"
+        })
+        bank.add_tool("stealth_browser", browser_ok)
+
+        if browser_ok:
+            logger.info(f"{self.name}: REAL BROWSER AVAILABLE — can browse the actual web")
+        else:
+            logger.warning(f"{self.name}: No browser — research only, no web actions")
+
+        if self.instruction_set.get("resources_required"):
+            for res in self.instruction_set["resources_required"]:
+                rid = res["id"]
+                entry = self.resource_registry.get(self.name, {}).get(rid, {})
+                if entry.get("status") == "provisioned":
+                    bank.add_capability(rid, True, entry.get("details", {}))
+
+        bank.save()
 
     def _save_resource_registry(self):
         with open(self.RESOURCE_REGISTRY, "w") as f:
@@ -377,6 +433,10 @@ class EvolvingAgent:
         parts.append("")
         parts.append(self.instruction_set.get("genesis_prompt", ""))
 
+        if self.email:
+            parts.append("")
+            parts.append(f"## My Email\n{self.email} (password: markchomba)")
+
         instructions = self.instruction_set.get("instructions", [])
         if instructions:
             parts.append("")
@@ -418,7 +478,7 @@ class EvolvingAgent:
         return "\n".join(parts)
 
     def run_cycle(self) -> dict:
-        """One full Plan ⭢ Act ⭢ Observe ⭢ Adapt cycle."""
+        """One full Plan -> Act -> Observe -> Adapt cycle."""
         self.cycle_count += 1
         logger.info(f"{self.name} cycle {self.cycle_count}")
 
@@ -451,29 +511,34 @@ class EvolvingAgent:
 
     def _log_chat(self, input_text: str, output_text: str = None,
                    mode: str = "hermes", success: bool = False,
-                   error: str = None, duration: int = 0):
+                   error: str = None, duration: int = 0,
+                   role: str = "worker"):
         """Log LLM interaction to chat_history for dashboard."""
         try:
             from master.system_store import SystemStore
             store = SystemStore()
             store.log_chat_interaction(
                 self.name, input_text, output_text, mode, success, error,
-                duration_ms=duration
+                duration_ms=duration, role=role
             )
         except Exception:
             pass
 
-    def _execute_via_hermes(self, prompt: str) -> dict:
-        """Execute via LLM router (NVIDIA DeepSeek V4 Flash with fallbacks)."""
+    def _execute_via_hermes(self, prompt: str, role: str = "worker") -> dict:
+        """Execute via LLM router with role-based model selection.
+
+        Roles: supervisor/critic use deepseek-v4-pro, worker uses deepseek-v4-flash.
+        """
         start = time.time()
-        logger.info(f"{self.name}: executing via Hermes")
+        logger.info(f"{self.name}: executing via Hermes (role={role})")
         try:
             from providers.router import LLMRouter
             llm = LLMRouter()
             output = llm.complete(
                 prompt,
                 system="You are an autonomous AI agent. Execute your purpose.",
-                max_tokens=4096,
+                max_tokens=8192 if role == "worker" else 4096,
+                role=role,
             )
 
             duration = int((time.time() - start) * 1000)
@@ -486,7 +551,7 @@ class EvolvingAgent:
                 with open(filepath, "w") as f:
                     f.write(output)
 
-                self._log_chat(prompt, output, "hermes", True, duration=duration)
+                self._log_chat(prompt, output, "hermes", True, duration=duration, role=role)
 
                 return {
                     "output": output,
@@ -495,11 +560,11 @@ class EvolvingAgent:
                     "platform": None,
                     "execution_mode": "hermes",
                 }
-            self._log_chat(prompt, None, "hermes", False, "No output", duration)
+            self._log_chat(prompt, None, "hermes", False, "No output", duration, role=role)
             return {"success": False, "error": "Hermes returned no output"}
         except Exception as e:
             duration = int((time.time() - start) * 1000)
-            self._log_chat(prompt, None, "hermes", False, str(e), duration)
+            self._log_chat(prompt, None, "hermes", False, str(e), duration, role=role)
             logger.error(f"{self.name}: LLM execution failed: {e}")
             return {"success": False, "error": str(e)}
 
@@ -587,7 +652,7 @@ class EvolvingAgent:
                 score = result.get("critique", {}).get("score", "?") if result.get("critique") else "?"
 
                 if verdict == "completed":
-                    logger.info(f"{self.name} | task completed ✓ (score {score}/10)")
+                    logger.info(f"{self.name} | task completed OK (score {score}/10)")
                     time.sleep(3)
                 elif verdict == "failed":
                     logger.warning(f"{self.name} | task failed after {revisions} revisions")
