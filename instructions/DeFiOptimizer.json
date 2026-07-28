@@ -7,9 +7,9 @@
   "sub_agents": {},
   "evolutions": [],
   "performance": {
-    "cycles_run": 1,
+    "cycles_run": 9,
     "successful_outputs": 3,
-    "failed_outputs": 17,
+    "failed_outputs": 25,
     "resources_provisioned": 0
   },
   "platform_rules": {}

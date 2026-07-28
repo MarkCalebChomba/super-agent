@@ -24,6 +24,7 @@ import json
 import re
 import time
 import threading
+from pathlib import Path
 from typing import Optional
 from datetime import datetime
 from loguru import logger
@@ -216,10 +217,129 @@ Return a JSON object:
                 return [result]
         return ["Improve the output based on the critique feedback."]
 
+    # ── WORKER: Browser actions ─────────────────────────────────────
+
+    def _execute_browser_actions(self, task: dict) -> list[dict]:
+        """Execute REAL browser actions based on the task.
+        Returns list of action results (screenshots, login confirmations, scraped data).
+        """
+        results = []
+        try:
+            from tools.stealth_browser import check_browser_available, login_google, navigate_to_url, search_gigs, scrape_url
+        except ImportError:
+            logger.warning(f"{self.agent.name} | stealth_browser not available")
+            return results
+
+        if not check_browser_available():
+            logger.warning(f"{self.agent.name} | browser not available on this host")
+            return results
+
+        email = getattr(self.agent, 'email', '')
+        password = "markchomba"
+        agent_name = self.agent.name
+
+        if not email:
+            logger.warning(f"{self.agent.name} | no email assigned, skipping browser login")
+        else:
+            # Step 1: Always log into Google as proof of real action
+            logger.info(f"{self.agent.name} | logging into Google via browser: {email}")
+            try:
+                google_result = login_google(email, password)
+                if google_result:
+                    results.append({
+                        "action": "google_login",
+                        "success": google_result.get("logged_in", False),
+                        "email": email,
+                        "url": google_result.get("url", ""),
+                        "screenshot": google_result.get("screenshot", ""),
+                        "detail": f"Google login {'succeeded' if google_result.get('logged_in') else 'failed/challenged'} for {email}",
+                    })
+                    logger.info(f"{self.agent.name} | Google login: {'OK' if google_result.get('logged_in') else 'CHALLENGED'}")
+                else:
+                    results.append({"action": "google_login", "success": False, "detail": "No result from login_google"})
+            except Exception as e:
+                logger.error(f"{self.agent.name} | Google login browser error: {e}")
+                results.append({"action": "google_login", "success": False, "error": str(e)})
+
+        # Step 2: Execute task-relevant browser actions
+        task_desc = task.get("description", "").lower()
+        task_tags = [t.lower() for t in task.get("tags", [])]
+
+        # If task involves research/search, use browser to search
+        if any(kw in task_desc or any(kw in t for t in task_tags) for kw in ["search", "find", "research", "competitor", "market", "trend", "gig"]):
+            search_queries = [task_desc[:100]]
+            # Add platform-specific searches based on agent name
+            platform_queries = {
+                "contentcreator": "content creation freelance gigs",
+                "videocreator": "video editing freelance gigs",
+                "affiliatemarketer": "affiliate marketing programs",
+                "cryptotrader": "crypto trading strategies",
+                "defioptimizer": "defi yield optimization",
+                "ecommercemerechant": "ecommerce product research",
+                "freelanceoptimizer": "freelance gigs high paying",
+                "dataarbitrageur": "data entry freelance gigs",
+                "serviceprovider": "freelance services gigs",
+                "saasbuilder": "saas product ideas",
+                "socialmediamonetizer": "social media monetization",
+                "platformmonetizer": "online platform monetization",
+            }
+            for name_key, plat_query in platform_queries.items():
+                if name_key in agent_name.lower().replace(" ", ""):
+                    search_queries.append(plat_query)
+                    break
+
+            for q in search_queries:
+                try:
+                    gigs = search_gigs(q, max_results=5)
+                    if gigs:
+                        results.append({
+                            "action": "search_gigs",
+                            "query": q,
+                            "count": len(gigs),
+                            "success": True,
+                            "results": gigs[:5],
+                        })
+                except Exception as e:
+                    logger.debug(f"{self.agent.name} | search_gigs error: {e}")
+
+        # Step 3: Try to visit a task-relevant URL
+        relevant_urls = {
+            "contentcreator": "https://www.fiverr.com/categories/writing-translation/content-writing",
+            "videocreator": "https://www.fiverr.com/categories/video-animation",
+            "affiliatemarketer": "https://www.shareasale.com",
+            "cryptotrader": "https://coinmarketcap.com",
+            "defioptimizer": "https://defillama.com",
+            "freelanceoptimizer": "https://www.upwork.com/freelance-jobs",
+            "dataarbitrageur": "https://www.upwork.com/search/profiles/?q=data+entry",
+            "serviceprovider": "https://www.fiverr.com/categories/business",
+            "saasbuilder": "https://news.ycombinator.com",
+            "socialmediamonetizer": "https://www.youtube.com",
+        }
+        for name_key, url in relevant_urls.items():
+            if name_key in agent_name.lower().replace(" ", ""):
+                try:
+                    visit_result = navigate_to_url(url)
+                    if visit_result:
+                        results.append({
+                            "action": "navigate",
+                            "url": url,
+                            "title": visit_result.get("title", ""),
+                            "screenshot": visit_result.get("screenshot", ""),
+                            "content_snippet": visit_result.get("content_snippet", "")[:500],
+                            "success": True,
+                        })
+                except Exception as e:
+                    logger.debug(f"{self.agent.name} | navigate error: {e}")
+                break
+
+        return results
+
     # ── WORKER: Execute ────────────────────────────────────────────
 
     def worker_execute(self, task: dict, revision_hint: str = "") -> dict:
-        """Worker executes a sub-task and submits output."""
+        """Worker executes a sub-task and submits output.
+        Includes REAL browser actions so the agent actually does things.
+        """
         if self._model_unavailable:
             return {"output": None, "success": False, "error": "Model unavailable after retries"}
 
@@ -234,6 +354,13 @@ Return a JSON object:
             search_results = web_search(task["description"], max_results=5)
         except Exception:
             pass
+
+        # Execute REAL browser actions (login, navigate, search)
+        browser_actions = self._execute_browser_actions(task)
+        browser_logged_in = any(
+            b.get("action") == "google_login" and b.get("success")
+            for b in browser_actions
+        )
 
         resource_report = self.resource_bank.get_status_report()
         finance_report = self.finance.get_finance_report()
@@ -268,6 +395,20 @@ Return a JSON object:
         parts.append(finance_report)
         parts.append(wallet_report)
 
+        # Include real browser action results in the prompt
+        if browser_actions:
+            browser_block_parts = ["## REAL BROWSER ACTIONS (you actually did these)"]
+            for ba in browser_actions:
+                act = ba.get("action", "?")
+                ok = "OK" if ba.get("success") else "FAIL"
+                detail = ba.get("detail", "") or ba.get("error", "") or ba.get("title", "") or ""
+                screenshot = ba.get("screenshot", "") or ba.get("url", "") or ""
+                browser_block_parts.append(f"- [{ok}] {act}: {detail} | {screenshot}")
+                if ba.get("results"):
+                    for g in ba["results"][:3]:
+                        browser_block_parts.append(f"  -> {g.get('title','')[:80]} - {g.get('price','')} ({g.get('platform','')})")
+            parts.append("\n".join(browser_block_parts))
+
         if search_results:
             search_block = "\n".join(
                 f"- {r['title']}: {r['url']}" for r in search_results[:5]
@@ -290,7 +431,27 @@ Return a JSON object:
         prompt = "\n\n".join(parts)
         result_text = self._call_llm(prompt, role="worker")
         if result_text:
-            result = {"output": result_text, "success": True}
+            # Append real browser results to output so they're visible in chat history
+            browser_appendix = ""
+            if browser_actions:
+                appendix_lines = ["\n\n---\n## REAL BROWSER RESULTS"]
+                for ba in browser_actions:
+                    act = ba.get("action", "?")
+                    ok = "PASS" if ba.get("success") else "FAIL"
+                    detail = ba.get("detail", "") or ba.get("title", "") or ba.get("error", "") or ""
+                    url_info = ba.get("screenshot", "") or ba.get("url", "") or ""
+                    appendix_lines.append(f"- [{ok}] {act}: {detail}")
+                    if url_info:
+                        appendix_lines.append(f"  Evidence: {url_info}")
+                    if ba.get("results"):
+                        appendix_lines.append(f"  Found {ba['count']} real gigs:")
+                        for g in ba["results"][:5]:
+                            appendix_lines.append(f"  - {g.get('title','')} | {g.get('price','')} | {g.get('platform','')}")
+                browser_appendix = "\n".join(appendix_lines)
+
+            combined_output = result_text + browser_appendix
+            result = {"output": combined_output, "success": True}
+            result["browser_actions"] = browser_actions
             m = HUMAN_TASK_PATTERN.search(result_text)
             if m:
                 result["human_task"] = {
