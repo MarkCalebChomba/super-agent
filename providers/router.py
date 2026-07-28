@@ -22,20 +22,19 @@ import requests
 from openai import OpenAI, DefaultHttpxClient
 import httpx
 
-ModelTier = Literal["cheap", "balanced", "powerful"]
-
+# All models must be >200B parameters. No small models.
 MODEL_TIERS = {
     "cheap": {
-        "openrouter": "nvidia/nemotron-nano-9b-v2:free",
-        "groq": "mixtral-8x7b-32768",
+        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",          # 1T params
+        "openrouter": "meta-llama/llama-3.1-405b-instruct:free",  # 405B
     },
     "balanced": {
-        "openrouter": "google/gemma-4-26b-a4b-it:free",
-        "groq": "llama-3.3-70b-versatile",
+        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",          # 1T params
+        "openrouter": "meta-llama/llama-3.1-405b-instruct:free",  # 405B
     },
     "powerful": {
-        "openrouter": "openai/gpt-oss-20b:free",
-        "groq": "llama-3.3-70b-versatile",
+        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",          # 1T params
+        "openrouter": "meta-llama/llama-3.1-405b-instruct:free",  # 405B
     },
 }
 
@@ -119,18 +118,14 @@ class LLMRouter:
                   max_tokens: int = 4096, temperature: float = 0.7,
                   tier: ModelTier = "balanced",
                   role: str = "worker") -> Optional[str]:
-        """Unified routing — all roles use the same reliable pipeline.
-
-        The "Pro" model is intentionally skipped (broken on all providers).
-        Flash (236B) is fast, reliable, and capable enough for every role.
-        """
+        """Unified routing — only models >200B parameters."""
 
         # 0. Hermes Agent (deprecated, kept for backwards compat)
         result = _try_hermes(prompt, system, max_tokens, temperature)
         if result:
             return result
 
-        # 1. NVIDIA flash (key1) — 60s timeout (API can be slow from SFO region)
+        # 1. NVIDIA DeepSeek V4 Flash (236B) — key1, 60s timeout
         self._rate_limit_nvidia()
         result = self._try_nvidia(prompt, system, max_tokens, temperature,
                                     model=self.NVIDIA_MODEL_FLASH, api_key=self.nvidia_key,
@@ -138,7 +133,15 @@ class LLMRouter:
         if result:
             return result
 
-        # 2. NVIDIA flash (key2) — spillover, 45s timeout
+        # 2. NVIDIA DeepSeek V4 Pro (1T) — key1, 90s timeout (cold start)
+        self._rate_limit_nvidia()
+        result = self._try_nvidia(prompt, system, max_tokens, temperature,
+                                    model=self.NVIDIA_MODEL_PRO, api_key=self.nvidia_key,
+                                    timeout_secs=90)
+        if result:
+            return result
+
+        # 3. NVIDIA DeepSeek V4 Flash (236B) — key2, 45s timeout
         self._rate_limit_nvidia()
         result = self._try_nvidia(prompt, system, max_tokens, temperature,
                                     model=self.NVIDIA_MODEL_FLASH,
@@ -147,35 +150,34 @@ class LLMRouter:
         if result:
             return result
 
-        # 3. HF Inference flash — fast fail (connection blocked in this region)
-        result = self._try_hf_inference(prompt, system, max_tokens, temperature,
-                                         model="deepseek-ai/DeepSeek-V4-Flash")
+        # 4. NVIDIA DeepSeek V4 Pro (1T) — key2, 90s timeout
+        self._rate_limit_nvidia()
+        result = self._try_nvidia(prompt, system, max_tokens, temperature,
+                                    model=self.NVIDIA_MODEL_PRO,
+                                    api_key=self.nvidia_key_2 or self.nvidia_key,
+                                    timeout_secs=90)
         if result:
             return result
 
-        # ── OpenRouter tier fallback (for both roles) ──
-        if tier == "powerful":
-            models = MODEL_TIERS["powerful"]
-        elif tier == "cheap":
-            models = MODEL_TIERS["cheap"]
-        else:
-            models = MODEL_TIERS["balanced"]
+        # 5. HF Inference DeepSeek V4 Flash (236B)
+        result = self._try_hf_inference(prompt, system, max_tokens, temperature,
+                                          model="deepseek-ai/DeepSeek-V4-Flash")
+        if result:
+            return result
 
+        # 6. OpenRouter — Llama 3.1 405B (405B params)
+        models = MODEL_TIERS.get(tier, MODEL_TIERS["balanced"])
         result = self._try_openrouter(prompt, system, max_tokens, temperature, models["openrouter"])
         if result:
             return result
         if self.openrouter_key_2:
             result = self._try_openrouter(prompt, system, max_tokens, temperature,
-                                           models["openrouter"], key_index=2)
+                                            models["openrouter"], key_index=2)
             if result:
                 return result
 
-        result = self._try_groq(prompt, system, max_tokens, temperature, models["groq"])
-        if result:
-            return result
-
-        result = self._try_ollama(prompt, system, max_tokens, temperature)
-        return result
+        # No Groq/Ollama fallback — no models >200B available on those providers
+        return None
 
     def _try_nvidia(self, prompt: str, system: str,
                     max_tokens: int, temperature: float,
