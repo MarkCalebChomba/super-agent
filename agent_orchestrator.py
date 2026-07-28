@@ -37,7 +37,7 @@ HUMAN_TASK_PATTERN = re.compile(
 
 
 # Global concurrency control — all agents share these
-_llm_semaphore = threading.Semaphore(8)  # 2 NVIDIA keys x 40 req/min each = 80 avail, use 8 concurrent
+_llm_semaphore = threading.Semaphore(3)  # max 3 concurrent LLM calls (stay under 35/key/min)
 _agent_run_lock = threading.Lock()
 _running_agents = {}  # agent_name -> thread
 

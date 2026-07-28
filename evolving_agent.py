@@ -653,16 +653,16 @@ class EvolvingAgent:
 
                 if verdict == "completed":
                     logger.info(f"{self.name} | task completed OK (score {score}/10)")
-                    time.sleep(3)
+                    time.sleep(30)
                 elif verdict == "failed":
                     logger.warning(f"{self.name} | task failed after {revisions} revisions")
-                    time.sleep(5)
+                    time.sleep(60)
                 elif verdict == "impossible":
                     logger.warning(f"{self.name} | task impossible after {revisions} revisions, moving on")
-                    time.sleep(5)
+                    time.sleep(60)
                 else:
                     logger.info(f"{self.name} | cycle finished ({verdict})")
-                    time.sleep(8)
+                    time.sleep(30)
 
                 self.memory.save_all()
 

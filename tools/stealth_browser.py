@@ -25,59 +25,62 @@ PROFILES_DIR.mkdir(parents=True, exist_ok=True)
 COOKIES_DIR.mkdir(parents=True, exist_ok=True)
 
 import threading
-_thread_local = threading.local()
+# Global shared browser (single instance, not per-thread) to save Railway RAM
+_global_playwright = None
+_global_browser = None
+_global_browser_lock = threading.Lock()
+_global_browser_pid = None  # track process for crash detection
 
 
 def _get_browser() -> tuple:
-    """Get or create thread-local Playwright browser instance.
-    Uses thread-local storage to avoid greenlet/thread conflicts.
-    Handles browser crashes by completely restarting Playwright if needed.
+    """Get or create a SINGLE shared Playwright browser instance.
+    All threads share one browser to save Railway RAM (12 threads × 200MB = 2.4GB otherwise).
+    Uses a lock for thread safety.
     """
-    pw = getattr(_thread_local, 'playwright', None)
-    browser = getattr(_thread_local, 'browser', None)
+    global _global_playwright, _global_browser, _global_browser_pid
 
-    # Check if existing browser is healthy
-    browser_ok = False
-    if browser and hasattr(browser, 'is_connected'):
-        try:
-            browser_ok = browser.is_connected()
-        except Exception:
-            browser_ok = False
+    with _global_browser_lock:
+        # Check if existing browser is healthy
+        browser_ok = False
+        if _global_browser and hasattr(_global_browser, 'is_connected'):
+            try:
+                browser_ok = _global_browser.is_connected()
+            except Exception:
+                browser_ok = False
 
-    if browser_ok:
-        return pw, browser
+        if browser_ok:
+            return _global_playwright, _global_browser
 
-    # Clean up crashed/stale browser
-    if browser:
-        try: browser.close()
-        except: pass
-    if pw:
-        try: pw.stop()
-        except: pass
-
-    # Launch fresh
-    try:
-        _thread_local.playwright = sync_playwright().start()
-        pw = _thread_local.playwright
-        _thread_local.browser = pw.chromium.launch(
-            headless=True,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--disable-setuid-sandbox",
-            ],
-        )
-        logger.info(f"Browser launched in thread {threading.get_ident()}")
-        return _thread_local.playwright, _thread_local.browser
-    except Exception as e:
-        logger.error(f"Browser launch failed: {e}")
-        # Clean up failed state
-        for attr in ['playwright', 'browser']:
-            try: delattr(_thread_local, attr)
+        # Clean up crashed/stale browser
+        if _global_browser:
+            try: _global_browser.close()
             except: pass
-        raise
+        if _global_playwright:
+            try: _global_playwright.stop()
+            except: pass
+        _global_playwright = None
+        _global_browser = None
+
+        # Launch fresh
+        try:
+            _global_playwright = sync_playwright().start()
+            _global_browser = _global_playwright.chromium.launch(
+                headless=True,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                    "--disable-gpu",
+                    "--disable-setuid-sandbox",
+                ],
+            )
+            logger.info(f"Global browser launched (shared across all agents)")
+            return _global_playwright, _global_browser
+        except Exception as e:
+            logger.error(f"Browser launch failed: {e}")
+            _global_playwright = None
+            _global_browser = None
+            raise
 
 
 def new_context() -> BrowserContext:

@@ -72,8 +72,10 @@ def _try_hermes(prompt: str, system: str,
     )
 
 
-# Global shared rate limiter — all LLMRouter instances share this
-_nvidia_window_global = []
+# Per-key rate limiters — 2 NVIDIA keys, each limited to 40 req/min
+# We use 35/min per key to leave headroom
+_nvidia_window_key1 = []
+_nvidia_window_key2 = []
 _nvidia_lock = threading.Lock()
 
 
@@ -101,21 +103,22 @@ class LLMRouter:
         self.hf_token = os.getenv("HF_TOKEN", "")
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
-    def _rate_limit_nvidia(self):
-        """Enforce 70 requests per minute SHARED across all instances.
-        2 API keys x 40 req/min each = 80 available. Using 70 to leave headroom.
+    def _rate_limit_nvidia(self, key_index: int = 1):
+        """Enforce 35 requests per minute PER NVIDIA key.
+        Each key allows 40 req/min, we use 35 to leave headroom.
         """
-        global _nvidia_window_global
+        global _nvidia_window_key1, _nvidia_window_key2
         now = time.time()
+        window = _nvidia_window_key1 if key_index == 1 else _nvidia_window_key2
         with _nvidia_lock:
-            _nvidia_window_global = [t for t in _nvidia_window_global if now - t < 60]
-            if len(_nvidia_window_global) >= 70:
-                sleep_time = 60 - (now - _nvidia_window_global[0])
+            window[:] = [t for t in window if now - t < 60]
+            if len(window) >= 35:
+                sleep_time = 60 - (now - window[0])
                 if sleep_time > 0:
-                    logger.info(f"NVIDIA shared rate limit: waiting {sleep_time:.1f}s")
+                    logger.info(f"NVIDIA key{key_index} rate limit: waiting {sleep_time:.1f}s")
                     time.sleep(sleep_time)
-                _nvidia_window_global = _nvidia_window_global[1:]
-            _nvidia_window_global.append(now)
+                window.pop(0)
+            window.append(now)
 
     def complete(self, prompt: str, agent_type: str = "general",
                   system: str = "You are a helpful AI assistant.",
@@ -157,15 +160,16 @@ class LLMRouter:
 
         # 3. NVIDIA (last resort — constantly rate limited from SFO)
         # Try Flash (236B) then Pro (1T) with each key, fail fast on rate limits
-        for key_attr, label in [("nvidia_key", "key1"), ("nvidia_key_2", "key2")]:
-            key = getattr(self, key_attr, None)
+        for key_idx, key_attr in enumerate([("nvidia_key", 1), ("nvidia_key_2", 2)], 1):
+            key_name, key_num = key_attr
+            key = getattr(self, key_name, None)
             if not key:
                 continue
             for model_attr, mdl_label, timeout in [
                 (self.NVIDIA_MODEL_FLASH, "Flash", 30),
                 (self.NVIDIA_MODEL_PRO, "Pro", 60),
             ]:
-                self._rate_limit_nvidia()
+                self._rate_limit_nvidia(key_index=key_num)
                 result = self._try_nvidia(prompt, system, max_tokens, temperature,
                                             model=model_attr, api_key=key,
                                             timeout_secs=timeout)
