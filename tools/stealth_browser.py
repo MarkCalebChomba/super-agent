@@ -31,15 +31,34 @@ _thread_local = threading.local()
 def _get_browser() -> tuple:
     """Get or create thread-local Playwright browser instance.
     Uses thread-local storage to avoid greenlet/thread conflicts.
+    Handles browser crashes by completely restarting Playwright if needed.
     """
     pw = getattr(_thread_local, 'playwright', None)
     browser = getattr(_thread_local, 'browser', None)
-    if browser and hasattr(browser, 'is_connected') and browser.is_connected():
+
+    # Check if existing browser is healthy
+    browser_ok = False
+    if browser and hasattr(browser, 'is_connected'):
+        try:
+            browser_ok = browser.is_connected()
+        except Exception:
+            browser_ok = False
+
+    if browser_ok:
         return pw, browser
+
+    # Clean up crashed/stale browser
+    if browser:
+        try: browser.close()
+        except: pass
+    if pw:
+        try: pw.stop()
+        except: pass
+
+    # Launch fresh
     try:
-        if pw is None:
-            _thread_local.playwright = sync_playwright().start()
-            pw = _thread_local.playwright
+        _thread_local.playwright = sync_playwright().start()
+        pw = _thread_local.playwright
         _thread_local.browser = pw.chromium.launch(
             headless=True,
             args=[
@@ -48,13 +67,16 @@ def _get_browser() -> tuple:
                 "--disable-dev-shm-usage",
                 "--disable-gpu",
                 "--disable-setuid-sandbox",
-                "--single-process",
             ],
         )
-        logger.info(f"Real browser launched (headless chromium) in thread {threading.get_ident()}")
+        logger.info(f"Browser launched in thread {threading.get_ident()}")
         return _thread_local.playwright, _thread_local.browser
     except Exception as e:
         logger.error(f"Browser launch failed: {e}")
+        # Clean up failed state
+        for attr in ['playwright', 'browser']:
+            try: delattr(_thread_local, attr)
+            except: pass
         raise
 
 
@@ -236,74 +258,115 @@ def login_and_collect(platform: str, email: str, password: str) -> Optional[dict
 
 
 def login_google(email: str, password: str) -> Optional[dict]:
-    """Log into Google Gmail via real browser. Returns login result."""
+    """Log into Google Gmail via real browser. Returns login result.
+    Handles challenge pages, timeouts, and anti-automation gracefully.
+    """
     context = new_context()
     page = context.new_page()
     try:
-        # Step 1: Go to Google login
         logger.info(f"Logging into Google: {email}")
         page.goto("https://accounts.google.com/signin", wait_until="domcontentloaded", timeout=30000)
         random_delay(2, 4)
 
+        current_url = page.url
+        page_title = page.title()
+
+        # Check if already on challenge/captcha page
+        if "challenge" in current_url or "captcha" in current_url:
+            logger.warning(f"Google challenge page for {email} (immediate)")
+            context.close()
+            return {"logged_in": False, "url": current_url, "title": page_title, "challenge": True}
+
         # Step 2: Enter email
-        email_input = page.query_selector("input[type='email'], input[name='identifier']")
+        random_delay(1, 2)
+        email_selector = "input[type='email'], input[name='identifier'], input[aria-label*='Email'], input[aria-label*='Phone']"
+        email_input = page.query_selector(email_selector)
         if email_input:
-            email_input.click()
+            try:
+                email_input.click(timeout=5000)
+            except Exception:
+                try:
+                    page.evaluate("el => el.click()", email_input)
+                except Exception:
+                    pass
             human_type(page, email)
         else:
-            logger.warning("Google email input not found")
+            logger.warning(f"Google email input not found for {email} (url={current_url})")
             context.close()
-            return None
+            return {"logged_in": False, "url": current_url, "title": page_title, "error": "email_input_not_found"}
 
         random_delay(1, 2)
         # Click Next
-        next_btn = page.query_selector("button[jsname='V67aGc'], #identifierNext button, button:has-text('Next')")
-        if next_btn:
-            next_btn.click()
-        else:
+        try:
+            next_btn = page.query_selector("#identifierNext button, button[jsname='V67aGc'], button:has-text('Next')")
+            if next_btn:
+                next_btn.click(timeout=5000)
+            else:
+                page.keyboard.press("Enter")
+        except Exception:
             page.keyboard.press("Enter")
-        random_delay(2, 4)
+        random_delay(3, 5)
+
+        current_url = page.url
+        if "challenge" in current_url or "captcha" in current_url:
+            logger.warning(f"Google challenge after email for {email}")
+            context.close()
+            return {"logged_in": False, "url": current_url, "title": page.title(), "challenge": True}
 
         # Step 3: Enter password
-        pass_input = page.query_selector("input[type='password'], input[name='Passwd']")
+        random_delay(1, 2)
+        pass_selector = "input[type='password'], input[name='Passwd'], input[aria-label*='Password']"
+        pass_input = page.query_selector(pass_selector)
         if pass_input:
-            pass_input.click()
+            try:
+                pass_input.click(timeout=5000)
+            except Exception:
+                try:
+                    page.evaluate("el => el.click()", pass_input)
+                except Exception:
+                    pass
             human_type(page, password)
         else:
-            logger.warning("Google password input not found")
+            logger.warning(f"Google password input not found for {email} (url={current_url})")
             context.close()
-            return None
+            return {"logged_in": False, "url": current_url, "title": page.title(), "error": "password_input_not_found"}
 
         random_delay(1, 2)
         # Click Next
-        next_btn2 = page.query_selector("button[jsname='V67aGc'], #passwordNext button, button:has-text('Next')")
-        if next_btn2:
-            next_btn2.click()
-        else:
+        try:
+            next_btn2 = page.query_selector("#passwordNext button, button[jsname='V67aGc'], button:has-text('Next')")
+            if next_btn2:
+                next_btn2.click(timeout=5000)
+            else:
+                page.keyboard.press("Enter")
+        except Exception:
             page.keyboard.press("Enter")
         random_delay(3, 6)
 
-        # Step 4: Check if login succeeded
-        title = page.title()
+        # Step 4: Check result
         current_url = page.url
-        logger.info(f"Google login result: url={current_url}, title={title[:80]}")
+        page_title = page.title()
+        logger.info(f"Google login result: url={current_url}, title={page_title[:80]}")
 
-        login_success = False
-        if "myaccount" in current_url or "accounts" not in current_url or "signin" not in current_url:
-            login_success = True
-        if "inbox" in current_url or "mail" in current_url:
-            login_success = True
+        login_success = bool(
+            "myaccount" in current_url
+            or "accounts.google.com" not in current_url
+            or "inbox" in current_url
+            or "mail" in current_url
+        )
         if "challenge" in current_url or "captcha" in current_url:
-            logger.warning(f"Google CAPTCHA/challenge for {email}")
             login_success = False
 
-        # Save cookies
-        cookies = context.cookies()
-        cookie_file = COOKIES_DIR / f"google_{email.split('@')[0]}_cookies.json"
-        with open(cookie_file, "w") as f:
-            json.dump(cookies, f)
+        # Save cookies (even if challenge, might be useful)
+        try:
+            cookies = context.cookies()
+            cookie_file = COOKIES_DIR / f"google_{email.split('@')[0]}_cookies.json"
+            with open(cookie_file, "w") as f:
+                json.dump(cookies, f)
+        except Exception:
+            pass
 
-        # Save screenshot as proof
+        # Save screenshot
         screenshots_dir = Path("data") / "screenshots"
         screenshots_dir.mkdir(parents=True, exist_ok=True)
         screenshot_path = str(screenshots_dir / f"google_login_{email.split('@')[0]}.png")
@@ -318,8 +381,7 @@ def login_google(email: str, password: str) -> Optional[dict]:
             "email": email,
             "logged_in": login_success,
             "url": current_url,
-            "title": title,
-            "cookies_saved": str(cookie_file),
+            "title": page_title,
             "screenshot": screenshot_path,
         }
     except Exception as e:

@@ -261,15 +261,17 @@ Return a JSON object:
                 try:
                     google_result = login_google(email, password)
                     if google_result:
+                        logged_in = google_result.get("logged_in", False)
                         results.append({
                             "action": "google_login",
-                            "success": google_result.get("logged_in", False),
+                            "success": logged_in,
                             "email": email,
                             "url": google_result.get("url", ""),
                             "screenshot": google_result.get("screenshot", ""),
-                            "detail": f"Google login {'succeeded' if google_result.get('logged_in') else 'failed/challenged'} for {email}",
+                            "detail": f"Google login {'succeeded' if logged_in else 'failed/challenged'} for {email}",
                         })
-                        logger.info(f"{self.agent.name} | Google login: {'OK' if google_result.get('logged_in') else 'CHALLENGED'}")
+                        logger.info(f"{self.agent.name} | Google login: {'OK' if logged_in else 'CHALLENGED'}")
+                        # If challenged, subsequent actions will auto-restart the browser via _get_browser()
                     else:
                         results.append({"action": "google_login", "success": False, "detail": "No result from login_google"})
                 except Exception as e:
