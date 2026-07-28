@@ -28,15 +28,15 @@ ModelTier = Literal["cheap", "balanced", "powerful"]
 MODEL_TIERS = {
     "cheap": {
         "nvidia_pro": "deepseek-ai/deepseek-v4-pro",        # 1T params (NVIDIA)
-        "openrouter": "deepseek/deepseek-r1:free",          # 671B (OpenRouter)
+        "openrouter": "openrouter/free",                    # auto-routes best free
     },
     "balanced": {
         "nvidia_pro": "deepseek-ai/deepseek-v4-pro",        # 1T
-        "openrouter": "deepseek/deepseek-r1:free",          # 671B
+        "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",  # 550B (free)
     },
     "powerful": {
         "nvidia_pro": "deepseek-ai/deepseek-v4-pro",        # 1T
-        "openrouter": "deepseek/deepseek-r1:free",          # 671B
+        "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",  # 550B (free)
     },
 }
 
@@ -137,11 +137,14 @@ class LLMRouter:
             if result:
                 return result
 
-        # 2. OpenRouter — try multiple >200B free models
+        # 2. OpenRouter — try multiple free models (>200B when available)
         models = MODEL_TIERS.get(tier, MODEL_TIERS["balanced"])
         openrouter_models = [
-            models["openrouter"],           # deepseek/deepseek-r1:free (671B)
-            "deepseek/deepseek-chat:free",  # DeepSeek V3 (671B)
+            models["openrouter"],                               # primary free model
+            "openrouter/free",                                  # auto-routes best free
+            "nvidia/nemotron-3-ultra-550b-a55b:free",           # 550B
+            "deepseek/deepseek-r1",                             # 671B (costs credits)
+            "deepseek/deepseek-chat",                           # 671B (costs credits)
         ]
         for or_model in openrouter_models:
             result = self._try_openrouter(prompt, system, max_tokens, temperature, or_model)
