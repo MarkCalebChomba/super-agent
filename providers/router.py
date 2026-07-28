@@ -102,12 +102,14 @@ class LLMRouter:
         self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
 
     def _rate_limit_nvidia(self):
-        """Enforce 30 requests per minute SHARED across all instances."""
+        """Enforce 70 requests per minute SHARED across all instances.
+        2 API keys x 40 req/min each = 80 available. Using 70 to leave headroom.
+        """
         global _nvidia_window_global
         now = time.time()
         with _nvidia_lock:
             _nvidia_window_global = [t for t in _nvidia_window_global if now - t < 60]
-            if len(_nvidia_window_global) >= 30:
+            if len(_nvidia_window_global) >= 70:
                 sleep_time = 60 - (now - _nvidia_window_global[0])
                 if sleep_time > 0:
                     logger.info(f"NVIDIA shared rate limit: waiting {sleep_time:.1f}s")
@@ -167,14 +169,18 @@ class LLMRouter:
         if result:
             return result
 
-        # 6. OpenRouter — Llama 3.1 405B (405B params)
+        # 6. OpenRouter — try multiple >200B models in order
         models = MODEL_TIERS.get(tier, MODEL_TIERS["balanced"])
-        result = self._try_openrouter(prompt, system, max_tokens, temperature, models["openrouter"])
-        if result:
-            return result
-        if self.openrouter_key_2:
+        openrouter_models = [
+            models["openrouter"],           # deepseek/deepseek-r1:free (671B)
+            "deepseek/deepseek-chat:free",  # DeepSeek V3 (671B)
+        ]
+        for or_model in openrouter_models:
+            result = self._try_openrouter(prompt, system, max_tokens, temperature, or_model)
+            if result:
+                return result
             result = self._try_openrouter(prompt, system, max_tokens, temperature,
-                                            models["openrouter"], key_index=2)
+                                            or_model, key_index=2)
             if result:
                 return result
 

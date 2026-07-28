@@ -37,23 +37,24 @@ HUMAN_TASK_PATTERN = re.compile(
 
 
 # Global concurrency control — all agents share these
-_llm_semaphore = threading.Semaphore(2)  # max 2 concurrent LLM calls (avoid NVIDIA rate limits)
+_llm_semaphore = threading.Semaphore(8)  # 2 NVIDIA keys x 40 req/min each = 80 avail, use 8 concurrent
 _agent_run_lock = threading.Lock()
 _running_agents = {}  # agent_name -> thread
 
 
-CRITIC_RUBRIC = """## Value Assessment Protocol
+CRITIC_RUBRIC = """## Value Assessment Protocol — URGENT: We need revenue NOW
 
-Evaluate the submitted work against these criteria:
+Evaluate the submitted work against these criteria, but priority is SPEED TO REVENUE:
 
-### 1. Technical Standards (pass/fail)
-- Is the output well-reasoned and logically sound?
-- Does it demonstrate competence in the domain?
-- Is it actionable, not just theoretical?
+### 1. Speed to Revenue (highest priority)
+- Does this output lead directly to money within hours, not days?
+- Can it be executed immediately without waiting for accounts/permissions?
+- Is it a SHORTCUT that produces cash fast?
+- COPY what already works — do NOT innovate or create from scratch
 
 ### 2. Commercial Value (pass/fail)
 - Does this create a DIRECT path to revenue or cost reduction?
-- Does this build an ASSET that can be monetised later?
+- Does this build an ASSET that can be monetised?
 - Is there a clear "who would pay for this" answer?
 - If copied from an existing source, is it personalised enough to be competitive?
 
@@ -130,21 +131,24 @@ class AgentOrchestrator:
 
 {wallet_report}
 
+CRITICAL: This is URGENT. We need money NOW. Not tomorrow, not next week.
+
 Decompose this mission into 3-5 concrete sub-tasks. Each sub-task must:
 
 1. Be specific and actionable by a Worker agent
 2. Have a clear "done" criterion
 3. Produce a tangible output (research, analysis, plan, asset)
-4. DO NOT generate anything from scratch. Your job is to:
+4. PRIORITIZE the shortest path to revenue above all else
+5. DO NOT generate anything from scratch. Your job is to:
    - Find what already works (competitors, top sellers, trending content)
    - COPY IT HEAVILY — rip the structure, format, and angle
    - Personalise it just enough to avoid plagiarism
    - Adapt for your specific audience/niche
-5. For content: find top-performing examples, steal their hook, rewrite in your voice
-6. For code: find working GitHub repos, fork and modify
-7. For business: find successful competitors, clone their model
-8. BE REALISTIC about the agent's resources. If it has no browser, no accounts, no API keys beyond LLM access, plan tasks that can be done with LLM + web search only.
-9. If the agent HAS a real browser, plan tasks that involve visiting real websites:
+6. For content: find top-performing examples, steal their hook, rewrite in your voice
+7. For code: find working GitHub repos, fork and modify
+8. For business: find successful competitors, clone their model
+9. BE REALISTIC about the agent's resources. If it has no browser, no accounts, no API keys beyond LLM access, plan tasks that can be done with LLM + web search only.
+10. If the agent HAS a real browser, plan tasks that involve visiting real websites:
    - Scraping competitor pricing and offerings
    - Finding real freelance gigs to underbid
    - Extracting real data from marketplaces
@@ -381,8 +385,8 @@ Return a JSON object:
             )
             parts.append(f"## REAL SEARCH RESULTS (use these instead of guessing)\n{search_block}")
 
-        parts.append("""## OUTPUT REQUIREMENTS
-1. Provide concrete output — not just plans or ideas
+        parts.append("""## OUTPUT REQUIREMENTS — URGENT: Revenue needed NOW
+1. Provide concrete output — NOT just plans or ideas. We need MONEY.
 2. HEAVILY COPY competitors. Find what works, rip the structure, personalise the voice.
 3. Cite REAL sources from the search results above. DO NOT make up URLs.
 4. If no search results are available, provide search queries the user can use
@@ -390,6 +394,7 @@ Return a JSON object:
    include this EXACT line in your output:
    HUMAN_TASK: What needs doing | https://signup-url.com | Instructions for the human
 6. End with SUBMISSION: followed by a brief summary of what you produced
+7. EVERY output must answer: "How does this make money RIGHT NOW?"
 
 ## OUTPUT
 """)
@@ -638,10 +643,10 @@ Return a JSON object:
         Each failed attempt increments cost in ResourceBank.
         After max_retries, sets _model_unavailable flag so the cycle can abort.
         """
-        acquired = _llm_semaphore.acquire(timeout=120)
+        acquired = _llm_semaphore.acquire(timeout=60)
         if not acquired:
-            logger.warning(f"{self.agent.name} | semaphore timeout (120s), retrying...")
-            _llm_semaphore.acquire(timeout=300)
+            logger.warning(f"{self.agent.name} | semaphore timeout (60s), retrying...")
+            _llm_semaphore.acquire(timeout=120)
 
         try:
             for attempt in range(1, max_retries + 1):
