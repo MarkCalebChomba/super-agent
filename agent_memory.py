@@ -99,12 +99,14 @@ class AgentMemory:
         task.setdefault("created_at", datetime.now().isoformat())
         task.setdefault("status", "pending")
         task.setdefault("attempts", 0)
+        # Normalize status to lowercase
+        task["status"] = task["status"].lower()
         self.task_queue.append(task)
         self._save_json(self.task_file, self.task_queue)
 
     def get_next_task(self) -> Optional[dict]:
         for t in self.task_queue:
-            if t.get("status") == "pending":
+            if t.get("status", "").lower() == "pending":
                 return t
         return None
 
@@ -116,10 +118,10 @@ class AgentMemory:
         self._save_json(self.task_file, self.task_queue)
 
     def pending_tasks(self) -> list[dict]:
-        return [t for t in self.task_queue if t.get("status") == "pending"]
+        return [t for t in self.task_queue if t.get("status", "").lower() == "pending"]
 
     def completed_tasks(self) -> list[dict]:
-        return [t for t in self.task_queue if t.get("status") == "completed"]
+        return [t for t in self.task_queue if t.get("status", "").lower() == "completed"]
 
     # ── Frustration / tenacity ─────────────────────────────────────
 

@@ -228,11 +228,11 @@ Return the tasks via the submit_tasks function.
             tasks = result["tasks"]
             for i, t in enumerate(tasks):
                 t.setdefault("id", f"task_{i+1}")
-                t.setdefault("status", "PENDING")
+                t.setdefault("status", "pending")
                 t.setdefault("attempts", 0)
                 t.setdefault("revisions", 0)
                 t.setdefault("action_type", "research")
-                t.setdefault("state", "PENDING")
+                t.setdefault("state", "pending")
                 self.memory.add_task(t)
 
             self.event_log.write(phase="planning_complete", event_id=event_id,
