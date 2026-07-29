@@ -137,6 +137,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;b
     <button class="btn btn-sm btn-primary" onclick="startAllAgents()" id="btn-start-all">&gt; Start All</button>
     <button class="btn btn-sm btn-danger" onclick="stopAllAgents()" id="btn-stop-all">[] Stop All</button>
     <a href="/analysis" class="btn btn-sm" style="text-decoration:none">** Analysis</a>
+    <a href="/human-tasks" class="btn btn-sm" style="text-decoration:none">!! Human Tasks</a>
   </div>
   <div class="stats">
     <span id="stat-agents">0</span> agents - <span id="stat-running">0</span> running - <span id="stat-builds">0</span> builds - <span id="stat-tasks">0</span> tasks - <span id="stat-time"></span>
@@ -828,6 +829,18 @@ setInterval(pollLogs, 2000);
 setInterval(loadAgentList, 5000);
 setInterval(loadTasks, 10000);
 loadAgentList();
+
+// Auto-switch to a tab (set via Flask auto_tab param, e.g. /human-tasks)
+const autoTab = '{{ auto_tab }}';
+if(autoTab){
+  // Wait for first agent to load, then auto-switch
+  const _waitForAgent = setInterval(() => {
+    if(currentAgent){
+      clearInterval(_waitForAgent);
+      setTimeout(() => switchTab(null, autoTab), 300);
+    }
+  }, 200);
+}
 </script>
 
 <!-- Live log feed at bottom, fixed -->

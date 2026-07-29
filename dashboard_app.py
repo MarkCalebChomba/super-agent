@@ -156,7 +156,8 @@ except: pass
 
 @app.route("/")
 def index():
-    return render_template("dashboard.html", now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    return render_template("dashboard.html", now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                           auto_tab="")
 
 @app.route("/agent/<name>")
 def agent_detail(name):
@@ -209,6 +210,11 @@ def agent_detail(name):
 @app.route("/analysis")
 def analysis_page():
     return render_template("analysis.html", now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+@app.route("/human-tasks")
+def human_tasks_page():
+    return render_template("dashboard.html", now=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                           auto_tab="tasks")
 
 @app.route("/build/<name>/<path:filename>")
 def view_build(name, filename):

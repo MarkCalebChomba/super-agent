@@ -715,13 +715,13 @@ Return your evaluation via the submit_evaluation function.
 
         self.event_log.write(phase="cycle_started", cycle_id=cycle_id)
 
-        # Check model availability
+        # Check model availability — brief cooldown only to avoid rapid-fire retries
         if self._model_unavailable:
-            if time.time() - self._model_failed_at > 120:
-                logger.info(f"{self.agent.name} | retrying model after 120s cooldown")
+            if time.time() - self._model_failed_at > 10:
+                logger.info(f"{self.agent.name} | retrying model after 10s cooldown")
                 self._model_unavailable = False
             else:
-                self.resource_bank.record_expense(0.0, "cycle skipped — model unavailable",
+                self.resource_bank.record_expense(0.0, "cycle paused briefly — model unavailable",
                                                    category="system")
                 return {"output": None, "success": False, "idle": True,
                         "error": "Model unavailable", "cycle_id": cycle_id}
