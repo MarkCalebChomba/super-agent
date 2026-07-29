@@ -12,6 +12,7 @@ Over time it:
 import os
 import json
 import time
+import uuid
 import shutil
 import random
 from pathlib import Path
@@ -480,7 +481,8 @@ class EvolvingAgent:
     def run_cycle(self) -> dict:
         """One full Plan -> Act -> Observe -> Adapt cycle."""
         self.cycle_count += 1
-        logger.info(f"{self.name} cycle {self.cycle_count}")
+        cycle_id = str(uuid.uuid4())
+        logger.info(f"{self.name} cycle {self.cycle_count} [{cycle_id[:8]}]")
 
         try:
             from live_tracker import update as _lt_update
@@ -488,9 +490,9 @@ class EvolvingAgent:
         except Exception:
             pass
 
-        result = self.orchestrator.run_cycle()
+        result = self.orchestrator.run_cycle(cycle_id=cycle_id)
 
-        # Track outcome in instruction set
+        # Track outcome in instruction set (same as before)
         if result.get("success"):
             self.instruction_set.setdefault("performance", {})["successful_outputs"] = \
                 self.instruction_set["performance"].get("successful_outputs", 0) + 1
@@ -498,12 +500,28 @@ class EvolvingAgent:
             self.instruction_set.setdefault("performance", {})["failed_outputs"] = \
                 self.instruction_set["performance"].get("failed_outputs", 0) + 1
         self.instruction_set["performance"]["cycles_run"] = self.cycle_count
+        self.instruction_set["performance"]["last_cycle_id"] = cycle_id
         self._save_instruction_set()
 
         try:
             from live_tracker import update as _lt_update
             txt = (result.get("output") or "")[:200]
             _lt_update(self.name, output_text=f"{result.get('verdict','?')}: {txt}")
+        except Exception:
+            pass
+
+        # Log cycle result to event_log
+        try:
+            self.orchestrator.event_log.write(
+                phase="run_cycle_result",
+                cycle_id=cycle_id,
+                cycle_count=self.cycle_count,
+                verdict=result.get("verdict", "?"),
+                success=result.get("success", False),
+                duration_ms=result.get("duration_ms", 0),
+                artifact_path=result.get("artifact_path"),
+                score=result.get("score") or (result.get("critique") or {}).get("score"),
+            )
         except Exception:
             pass
 

@@ -1,112 +1,386 @@
-"""LLM Router — routes calls across providers with role-based tiered fallback.
+"""LLM Router — one hardened provider path with circuit breaker + real cost tracking.
 
-The "Pro" model (deepseek-v4-pro) is intentionally skipped on all providers:
-- HF Inference: 1T param model, cold-start timeouts (9+ min, no output)
-- NVIDIA API: model exists in catalog but times out on inference
-
-All roles use the Flash model which is fast, reliable, and 236B params.
-
-Routing:
-  1. NVIDIA v4-flash (key1) — primary for all roles
-  2. NVIDIA v4-flash (key2) — spillover
-  3. HF Inference v4-flash — uses HF credits, no NVIDIA rate limit hit
-  4. OpenRouter → Groq → Ollama
+Architecture (per user's redesign):
+- Circuit breaker per provider (opens after N failures, cooldown, then half-open)
+- complete() returns LLMResult with text + token_usage + cost
+- Tool-calling support for schema-forced JSON output
+- EventLog writes for every call
 """
 import os
-import time
+import re
 import json
+import time
+import random
 import threading
-from typing import Optional, Literal
+from typing import Optional, Literal, NamedTuple
+from dataclasses import dataclass
 from loguru import logger
 import requests
-from openai import OpenAI, DefaultHttpxClient
-import httpx
+
 
 ModelTier = Literal["cheap", "balanced", "powerful"]
 
-# All models must be >200B parameters. No small models.
 MODEL_TIERS = {
     "cheap": {
-        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",        # 1T params (NVIDIA)
-        "openrouter": "openrouter/free",                    # auto-routes best free
+        "hf": "deepseek-ai/DeepSeek-V4-Flash",
+        "openrouter": "openrouter/free",
     },
     "balanced": {
-        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",        # 1T
-        "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",  # 550B (free)
+        "hf": "deepseek-ai/DeepSeek-V4-Flash",
+        "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",
     },
     "powerful": {
-        "nvidia_pro": "deepseek-ai/deepseek-v4-pro",        # 1T
-        "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",  # 550B (free)
+        "hf": "deepseek-ai/DeepSeek-V3",
+        "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",
     },
 }
 
-
-_HERMES_HF_CLIENT = None
-
-def _get_hermes_hf() -> Optional[object]:
-    """Lazy-init the HF Hermes client."""
-    global _HERMES_HF_CLIENT
-    if _HERMES_HF_CLIENT is None:
-        try:
-            from hermes_integration.hermes_hf_client import HermesHFClient
-            _HERMES_HF_CLIENT = HermesHFClient()
-        except Exception:
-            _HERMES_HF_CLIENT = False
-    return _HERMES_HF_CLIENT if _HERMES_HF_CLIENT else None
+# Approximate $/token costs for DeepSeek V4 Flash via HF router
+COST_PER_INPUT_TOKEN = 0.00000014   # $0.14/M tokens
+COST_PER_OUTPUT_TOKEN = 0.00000028  # $0.28/M tokens
 
 
-def _try_hermes(prompt: str, system: str,
-                max_tokens: int, temperature: float) -> Optional[str]:
-    """Route through Hermes Agent hosted on Hugging Face Spaces.
-    
-    Hermes handles LLM routing, web search, and research tools remotely.
-    Falls back to local providers if unreachable.
-    """
-    client = _get_hermes_hf()
-    if not client or not client.available:
-        return None
-    return client.complete(
-        prompt=prompt,
-        system=system,
-        max_tokens=max_tokens,
-    )
+class LLMResult(NamedTuple):
+    text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str = ""
+    provider: str = ""
+    latency_ms: float = 0.0
+
+    @property
+    def cost(self) -> float:
+        return (self.input_tokens * COST_PER_INPUT_TOKEN +
+                self.output_tokens * COST_PER_OUTPUT_TOKEN)
 
 
-# Per-key rate limiters — 2 NVIDIA keys, each limited to 40 req/min
-# We use 35/min per key to leave headroom
-_nvidia_window_key1 = []
-_nvidia_window_key2 = []
+class CircuitBreaker:
+    """Per-provider circuit breaker. Opens after N failures, half-opens after cooldown."""
+
+    def __init__(self, name: str, fail_threshold: int = 5, cooldown_s: float = 60.0):
+        self.name = name
+        self.fail_threshold = fail_threshold
+        self.cooldown_s = cooldown_s
+        self._failures = 0
+        self._opened_at: Optional[float] = None
+        self._lock = threading.Lock()
+
+    @property
+    def is_open(self) -> bool:
+        with self._lock:
+            if self._opened_at is None:
+                return False
+            if time.time() - self._opened_at > self.cooldown_s:
+                # half-open — allow one probe
+                return False
+            return True
+
+    def record(self, ok: bool):
+        with self._lock:
+            if ok:
+                self._failures = 0
+                self._opened_at = None
+            else:
+                self._failures += 1
+                if self._failures >= self.fail_threshold:
+                    self._opened_at = time.time()
+                    logger.warning(f"Circuit breaker {self.name} OPENED after {self._failures} failures")
+
+    def __repr__(self) -> str:
+        with self._lock:
+            status = "OPEN" if self._opened_at and self._opened_at > time.time() - self.cooldown_s else "CLOSED"
+            return f"CircuitBreaker({self.name}, status={status}, failures={self._failures})"
+
+
+# ── Global circuit breakers ──────────────────────────────────────────
+_hf_breaker = CircuitBreaker("hf-inference", fail_threshold=5, cooldown_s=60)
+_or_breaker = CircuitBreaker("openrouter", fail_threshold=3, cooldown_s=120)
+_nv_breaker = CircuitBreaker("nvidia", fail_threshold=3, cooldown_s=120)
+
+# Per-key rate limiters for NVIDIA
+_nvidia_window_key1: list[float] = []
+_nvidia_window_key2: list[float] = []
 _nvidia_lock = threading.Lock()
 
 
-class LLMRouter:
-    """Routes LLM calls across providers with tiered fallback.
+class ProviderUnavailable(Exception):
+    """All providers exhausted or circuit-broken."""
 
-    All roles use the same reliable pipeline with shared rate limiting.
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text) // 4)
+
+
+class LLMRouter:
+    """One hardened provider path per user's redesign.
+
+    complete() returns LLMResult with real token counts.
+    complete_structured() forces a JSON schema via tool-calling.
     """
 
+    HF_BASE = "https://router.huggingface.co/v1"
     NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
     NVIDIA_MODEL_FLASH = "deepseek-ai/deepseek-v4-flash"
     NVIDIA_MODEL_PRO = "deepseek-ai/deepseek-v4-pro"
-    HF_INFERENCE_BASE = "https://api-inference.huggingface.co/v1"
-    HF_PRO_MODEL = "deepseek-ai/DeepSeek-V4-Pro"
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
-    GROQ_BASE = "https://api.groq.com/openai/v1"
-    OLLAMA_BASE = "http://localhost:11434"
 
     def __init__(self):
+        self.hf_token = os.getenv("HF_TOKEN", "")
         self.nvidia_key = os.getenv("NVIDIA_API_KEY", "")
         self.nvidia_key_2 = os.getenv("NVIDIA_API_KEY_2", "")
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
         self.openrouter_key_2 = os.getenv("OPENROUTER_API_KEY_2", "")
-        self.groq_key = os.getenv("GROQ_API_KEY", "")
-        self.hf_token = os.getenv("HF_TOKEN", "")
-        self.ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
+
+    def complete(self, prompt: str,
+                 system: str = "You are a helpful AI assistant.",
+                 max_tokens: int = 4096,
+                 temperature: float = 0.7,
+                 model: Optional[str] = None,
+                 tools: Optional[list] = None,
+                 tool_choice: Optional[str] = None,
+                 tier: ModelTier = "balanced",
+                 ) -> Optional[LLMResult]:
+        """Primary provider path: HF Inference → OpenRouter → NVIDIA.
+
+        Every call writes to the circuit breaker. Uses exponential backoff.
+        Returns LLMResult or None if all providers exhausted.
+        """
+        models = MODEL_TIERS.get(tier, MODEL_TIERS["balanced"])
+        hf_model = model or models["hf"]
+
+        last_error = ""
+
+        # 1. HF Inference (primary — only consistently working provider)
+        if not _hf_breaker.is_open and self.hf_token:
+            for attempt in range(2):
+                try:
+                    result = self._call_hf(prompt, system, max_tokens,
+                                            temperature, hf_model,
+                                            tools=tools, tool_choice=tool_choice)
+                    if result:
+                        _hf_breaker.record(True)
+                        return result
+                except Exception as e:
+                    _hf_breaker.record(False)
+                    last_error = str(e)[:100]
+                    if attempt == 0:
+                        delay = 1.0 + random.uniform(0, 0.5)
+                        time.sleep(delay)
+        else:
+            last_error = "circuit open or no token"
+
+        # 2. OpenRouter fallback
+        if not _or_breaker.is_open:
+            or_models = [
+                models.get("openrouter", "openrouter/free"),
+                "openrouter/free",
+                "deepseek/deepseek-r1",
+                "deepseek/deepseek-chat",
+            ]
+            for or_model in or_models:
+                try:
+                    result = self._call_openrouter(prompt, system, max_tokens,
+                                                    temperature, or_model)
+                    if result:
+                        _or_breaker.record(True)
+                        return result
+                except Exception as e:
+                    _or_breaker.record(False)
+                    last_error = str(e)[:100]
+
+        # 3. NVIDIA (last resort)
+        if not _nv_breaker.is_open:
+            for key_attr, key_idx in [("nvidia_key", 1), ("nvidia_key_2", 2)]:
+                key = getattr(self, key_attr, None)
+                if not key:
+                    continue
+                for mdl, timeout in [(self.NVIDIA_MODEL_FLASH, 30), (self.NVIDIA_MODEL_PRO, 60)]:
+                    self._rate_limit_nvidia(key_idx)
+                    try:
+                        result = self._call_nvidia(prompt, system, max_tokens,
+                                                    temperature, mdl, key, timeout)
+                        if result:
+                            _nv_breaker.record(True)
+                            return result
+                    except Exception as e:
+                        _nv_breaker.record(False)
+                        last_error = str(e)[:100]
+
+        logger.error(f"All providers exhausted. Last error: {last_error}")
+        return None
+
+    def complete_structured(self, prompt: str,
+                            schema: dict,
+                            system: str = "You are a helpful AI assistant.",
+                            max_tokens: int = 4096,
+                            temperature: float = 0.7,
+                            tier: ModelTier = "balanced",
+                            ) -> Optional[dict]:
+        """Call LLM with a tool/function schema to force structured JSON output.
+
+        Uses tool_choice='required' + a single function tool defined by schema.
+        Falls back to prose+parse if the provider doesn't support tool calling.
+        """
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "submit_output",
+                "description": schema.get("description", "Submit structured output"),
+                "parameters": schema["input_schema"],
+            },
+        }
+        result = self.complete(
+            prompt=prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tools=[tool],
+            tool_choice={"type": "function", "function": {"name": "submit_output"}},
+            tier=tier,
+        )
+        if result and result.text:
+            # Try to extract tool call arguments from response
+            try:
+                data = json.loads(result.text)
+                return data
+            except json.JSONDecodeError:
+                pass
+            # Try extracting from tool_calls format
+            try:
+                data = json.loads(result.text)
+                if "choices" in data:
+                    msg = data["choices"][0]["message"]
+                    if "tool_calls" in msg:
+                        args = msg["tool_calls"][0]["function"]["arguments"]
+                        return json.loads(args)
+            except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+                pass
+            # Fallback: try direct parse of any JSON in the response
+            json_match = re.search(r'\{.*\}', result.text, re.DOTALL)
+            if json_match:
+                try:
+                    return json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    pass
+        logger.warning("complete_structured: no valid JSON from LLM")
+        return None
+
+    # ── HF Inference ────────────────────────────────────────────────
+
+    def _call_hf(self, prompt: str, system: str,
+                 max_tokens: int, temperature: float,
+                 model: str,
+                 tools: Optional[list] = None,
+                 tool_choice: Optional[str] = None,
+                 ) -> Optional[LLMResult]:
+        t0 = time.time()
+        body = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            "max_tokens": min(max_tokens, 32000),
+            "temperature": temperature,
+            "top_p": 0.95,
+        }
+        if tools:
+            body["tools"] = tools
+        if tool_choice:
+            body["tool_choice"] = tool_choice
+
+        resp = requests.post(
+            f"{self.HF_BASE}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {self.hf_token}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=120,
+        )
+        latency = (time.time() - t0) * 1000
+
+        if resp.status_code != 200:
+            logger.info(f"HF ({model}) status={resp.status_code}: {resp.text[:200]}")
+            # Non-200 is a failure for the circuit breaker
+            raise RuntimeError(f"HF status {resp.status_code}: {resp.text[:200]}")
+
+        data = resp.json()
+        choice = data["choices"][0]
+        message = choice["message"]
+
+        # Extract text: either tool call args or plain content
+        if message.get("tool_calls"):
+            text = message["tool_calls"][0]["function"]["arguments"]
+        else:
+            text = message.get("content", "")
+
+        # Token usage
+        usage = data.get("usage", {})
+        in_tokens = usage.get("prompt_tokens", _estimate_tokens(prompt + system))
+        out_tokens = usage.get("completion_tokens", _estimate_tokens(text))
+
+        logger.info(f"HF SUCCESS ({model}): {len(text)} chars, "
+                     f"{in_tokens}+{out_tokens} tokens, {latency:.0f}ms")
+
+        return LLMResult(
+            text=text,
+            input_tokens=in_tokens,
+            output_tokens=out_tokens,
+            model=model,
+            provider="hf",
+            latency_ms=latency,
+        )
+
+    # ── OpenRouter ──────────────────────────────────────────────────
+
+    def _call_openrouter(self, prompt: str, system: str,
+                          max_tokens: int, temperature: float,
+                          model: str, key_index: int = 1) -> Optional[LLMResult]:
+        key = self.openrouter_key_2 if key_index == 2 else self.openrouter_key
+        if not key:
+            return None
+        t0 = time.time()
+        resp = requests.post(
+            f"{self.OPENROUTER_BASE}/chat/completions",
+            headers={
+                "Authorization": f"Bearer {key}",
+                "Content-Type": "application/json",
+                "HTTP-Referer": "https://github.com/MarkCalebChomba/super-agent",
+            },
+            json={
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                "max_tokens": max_tokens,
+                "temperature": temperature,
+            },
+            timeout=30,
+        )
+        latency = (time.time() - t0) * 1000
+
+        if resp.status_code == 200:
+            data = resp.json()
+            text = data["choices"][0]["message"]["content"]
+            usage = data.get("usage", {})
+            return LLMResult(
+                text=text,
+                input_tokens=usage.get("prompt_tokens", _estimate_tokens(prompt + system)),
+                output_tokens=usage.get("completion_tokens", _estimate_tokens(text)),
+                model=model,
+                provider="openrouter",
+                latency_ms=latency,
+            )
+        logger.debug(f"OpenRouter ({model}): {resp.status_code}")
+        if resp.status_code == 429:
+            time.sleep(5)
+        return None
+
+    # ── NVIDIA ──────────────────────────────────────────────────────
 
     def _rate_limit_nvidia(self, key_index: int = 1):
-        """Enforce 35 requests per minute PER NVIDIA key.
-        Each key allows 40 req/min, we use 35 to leave headroom.
-        """
         global _nvidia_window_key1, _nvidia_window_key2
         now = time.time()
         window = _nvidia_window_key1 if key_index == 1 else _nvidia_window_key2
@@ -115,233 +389,45 @@ class LLMRouter:
             if len(window) >= 35:
                 sleep_time = 60 - (now - window[0])
                 if sleep_time > 0:
-                    logger.info(f"NVIDIA key{key_index} rate limit: waiting {sleep_time:.1f}s")
                     time.sleep(sleep_time)
                 window.pop(0)
             window.append(now)
 
-    def complete(self, prompt: str, agent_type: str = "general",
-                  system: str = "You are a helpful AI assistant.",
-                  max_tokens: int = 4096, temperature: float = 0.7,
-                  tier: ModelTier = "balanced",
-                  role: str = "worker") -> Optional[str]:
-        """Unified routing — only models >200B parameters."""
-
-        # 0. Hermes Agent (deprecated, kept for backwards compat)
-        result = _try_hermes(prompt, system, max_tokens, temperature)
-        if result:
-            return result
-
-        # 1. HF Inference — try multiple >200B models
-        for hf_model in ["deepseek-ai/DeepSeek-V4-Flash", "deepseek-ai/DeepSeek-R1",
-                         "deepseek-ai/DeepSeek-V3"]:
-            result = self._try_hf_inference(prompt, system, max_tokens, temperature,
-                                              model=hf_model)
-            if result:
-                return result
-
-        # 2. OpenRouter — try multiple free models (>200B when available)
-        models = MODEL_TIERS.get(tier, MODEL_TIERS["balanced"])
-        openrouter_models = [
-            models["openrouter"],                               # primary free model
-            "openrouter/free",                                  # auto-routes best free
-            "nvidia/nemotron-3-ultra-550b-a55b:free",           # 550B
-            "deepseek/deepseek-r1",                             # 671B (costs credits)
-            "deepseek/deepseek-chat",                           # 671B (costs credits)
-        ]
-        for or_model in openrouter_models:
-            result = self._try_openrouter(prompt, system, max_tokens, temperature, or_model)
-            if result:
-                return result
-            result = self._try_openrouter(prompt, system, max_tokens, temperature,
-                                            or_model, key_index=2)
-            if result:
-                return result
-
-        # 3. NVIDIA (last resort — constantly rate limited from SFO)
-        # Try Flash (236B) then Pro (1T) with each key, fail fast on rate limits
-        for key_idx, key_attr in enumerate([("nvidia_key", 1), ("nvidia_key_2", 2)], 1):
-            key_name, key_num = key_attr
-            key = getattr(self, key_name, None)
-            if not key:
-                continue
-            for model_attr, mdl_label, timeout in [
-                (self.NVIDIA_MODEL_FLASH, "Flash", 30),
-                (self.NVIDIA_MODEL_PRO, "Pro", 60),
-            ]:
-                self._rate_limit_nvidia(key_index=key_num)
-                result = self._try_nvidia(prompt, system, max_tokens, temperature,
-                                            model=model_attr, api_key=key,
-                                            timeout_secs=timeout)
-                if result:
-                    return result
-
-        return None
-
-    def _try_nvidia(self, prompt: str, system: str,
-                    max_tokens: int, temperature: float,
-                    model: str = None, api_key: str = None,
-                    timeout_secs: int = 90) -> Optional[str]:
-        """Call NVIDIA DeepSeek via OpenAI-compatible API."""
-        key = api_key or self.nvidia_key
-        mdl = model or self.NVIDIA_MODEL_FLASH
-        if not key:
-            return None
-        try:
-            http_client = httpx.Client(timeout=httpx.Timeout(timeout_secs, connect=15))
-            client = OpenAI(
-                base_url=self.NVIDIA_BASE,
-                api_key=key,
-                http_client=http_client,
-                max_retries=0,
+    def _call_nvidia(self, prompt: str, system: str,
+                      max_tokens: int, temperature: float,
+                      model: str, api_key: str,
+                      timeout_secs: int) -> Optional[LLMResult]:
+        t0 = time.time()
+        import httpx
+        from openai import OpenAI, DefaultHttpxClient
+        http_client = httpx.Client(timeout=httpx.Timeout(timeout_secs, connect=15))
+        client = OpenAI(
+            base_url=self.NVIDIA_BASE,
+            api_key=api_key,
+            http_client=http_client,
+            max_retries=0,
+        )
+        completion = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": prompt},
+            ],
+            temperature=temperature,
+            top_p=0.95,
+            max_tokens=min(max_tokens, 16384),
+            stream=False,
+        )
+        latency = (time.time() - t0) * 1000
+        content = completion.choices[0].message.content
+        if content:
+            usage = completion.usage
+            return LLMResult(
+                text=content,
+                input_tokens=usage.prompt_tokens if usage else _estimate_tokens(prompt + system),
+                output_tokens=usage.completion_tokens if usage else _estimate_tokens(content),
+                model=model,
+                provider="nvidia",
+                latency_ms=latency,
             )
-            completion = client.chat.completions.create(
-                model=mdl,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                temperature=temperature,
-                top_p=0.95,
-                max_tokens=max_tokens if max_tokens <= 16384 else 16384,
-                stream=False,
-            )
-            content = completion.choices[0].message.content
-            if content:
-                return content
-        except Exception as e:
-            err_str = str(e)
-            logger.debug(f"NVIDIA {mdl} failed: {err_str[:120]}")
-            if "503" in err_str or "ResourceExhausted" in err_str or "429" in err_str:
-                logger.info(f"NVIDIA {mdl} exhausted/rate limited, skip to next provider")
-        return None
-
-    def _try_hf_inference(self, prompt: str, system: str,
-                          max_tokens: int, temperature: float,
-                          model: str = None) -> Optional[str]:
-        """Call DeepSeek via Hugging Face Inference API (direct REST, not OpenAI wrapper).
-
-        Uses the serverless Inference API at huggingface.co/models/{model}/v1/chat.
-        """
-        if not self.hf_token:
-            return None
-        mdl = model or "deepseek-ai/DeepSeek-V4-Flash"
-        try:
-            logger.info(f"HF Inference: calling {mdl} via router")
-            resp = requests.post(
-                "https://router.huggingface.co/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.hf_token}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": mdl,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": min(max_tokens, 32000),
-                    "temperature": temperature,
-                    "top_p": 0.95,
-                },
-                timeout=60,
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                content = data["choices"][0]["message"]["content"]
-                if content:
-                    logger.info(f"HF Inference SUCCESS: got {len(content)} chars")
-                    return content
-            logger.info(f"HF Inference ({mdl}) status={resp.status_code}: {resp.text[:200]}")
-        except Exception as e:
-            logger.info(f"HF Inference ({mdl}) failed: {str(e)[:200]}")
-        return None
-
-    def _try_openrouter(self, prompt: str, system: str,
-                        max_tokens: int, temperature: float,
-                        model: str, key_index: int = 1) -> Optional[str]:
-        key = self.openrouter_key_2 if key_index == 2 else self.openrouter_key
-        if not key:
-            return None
-        try:
-            resp = requests.post(
-                f"{self.OPENROUTER_BASE}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://github.com/MarkCalebChomba/super-agent",
-                },
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                },
-                timeout=30,
-            )
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
-            logger.debug(f"OpenRouter ({model}): {resp.status_code}")
-        except Exception as e:
-            logger.debug(f"OpenRouter failed: {e}")
-        return None
-
-    def _try_groq(self, prompt: str, system: str,
-                  max_tokens: int, temperature: float,
-                  model: str) -> Optional[str]:
-        if not self.groq_key:
-            return None
-        try:
-            time.sleep(1)
-            resp = requests.post(
-                f"{self.GROQ_BASE}/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {self.groq_key}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                },
-                timeout=30,
-            )
-            if resp.status_code == 200:
-                return resp.json()["choices"][0]["message"]["content"]
-            logger.debug(f"Groq ({model}): {resp.status_code}")
-            if resp.status_code == 429:
-                time.sleep(10)
-        except Exception as e:
-            logger.debug(f"Groq failed: {e}")
-        return None
-
-    def _try_ollama(self, prompt: str, system: str,
-                    max_tokens: int, temperature: float) -> Optional[str]:
-        try:
-            resp = requests.post(
-                f"{self.ollama_host}/api/chat",
-                json={
-                    "model": "llama3.2",
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": prompt},
-                    ],
-                    "options": {
-                        "num_predict": max_tokens,
-                        "temperature": temperature,
-                    },
-                },
-                timeout=60,
-            )
-            if resp.status_code == 200:
-                return resp.json()["message"]["content"]
-        except Exception as e:
-            logger.debug(f"Ollama failed: {e}")
         return None

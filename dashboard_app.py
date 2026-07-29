@@ -546,6 +546,26 @@ def api_logs():
     if level: logs = [l for l in logs if l["level"] == level]
     return jsonify(logs[-limit:])
 
+@app.route("/api/event-log")
+def api_event_log():
+    agent = request.args.get("agent", "")
+    phase = request.args.get("phase", "")
+    limit = request.args.get("limit", 100, type=int)
+    try:
+        from event_log import EventLog
+        names = [agent] if agent else [a["agent_name"] for a in get_store().get_all_agents()]
+        events = []
+        for name in names:
+            el = EventLog(name)
+            for e in el.read(limit):
+                if phase and e.get("phase") != phase:
+                    continue
+                events.append(e)
+        events.sort(key=lambda e: e.get("ts", 0), reverse=True)
+        return jsonify(events[:limit])
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+
 @app.route("/api/builds/<name>")
 def api_builds(name):
     d = BUILD_DIR / name
@@ -639,17 +659,23 @@ def _init_startup():
     _startup_done = True
     # Seed agents from instructions/ directory
     seed_agents()
+    # Configurable agent count — default 1 (per user's redesign)
+    max_agents = int(os.getenv("AGENT_COUNT", "1"))
+    started = 0
     # Start all agent threads so they actually run, not just sit registered
     try:
         store = get_store()
         agents = store.get_all_agents()
-        for a in agents:
+        for a in agents[:max_agents] if max_agents > 0 else agents:
             name = a["agent_name"]
             if name not in _agent_threads or not _agent_threads[name].is_alive():
                 logger.info(f"Auto-starting agent: {name}")
                 result = start_agent_thread(name)
+                started += 1
                 if not result.get("success"):
                     logger.warning(f"Failed to auto-start {name}: {result.get('error', 'unknown')}")
+        if started < len(agents):
+            logger.info(f"Started {started}/{len(agents)} agents (AGENT_COUNT={max_agents})")
     except Exception as e:
         logger.error(f"auto-start agents failed: {e}")
     # Restore persistent data from Hugging Face Hub (if configured)
