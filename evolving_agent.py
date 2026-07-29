@@ -537,7 +537,7 @@ class EvolvingAgent:
             output = llm.complete(
                 prompt,
                 system="You are an autonomous AI agent. Execute your purpose.",
-                max_tokens=8192 if role == "worker" else 4096,
+                max_tokens=16384 if role == "worker" else 8192,
                 role=role,
             )
 

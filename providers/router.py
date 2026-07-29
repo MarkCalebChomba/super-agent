@@ -240,7 +240,7 @@ class LLMRouter:
                         {"role": "system", "content": system},
                         {"role": "user", "content": prompt},
                     ],
-                    "max_tokens": min(max_tokens, 16384),
+                    "max_tokens": min(max_tokens, 32000),
                     "temperature": temperature,
                     "top_p": 0.95,
                 },

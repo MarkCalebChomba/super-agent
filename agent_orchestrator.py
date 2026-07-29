@@ -164,8 +164,14 @@ Example:
 """
         output = self._call_llm(prompt, role="supervisor")
         if output:
+            # Try to parse as JSON first
+            cleaned = output.strip()
+            if cleaned.startswith("```"):
+                cleaned = re.sub(r'^```(?:json)?\s*', '', cleaned)
+                cleaned = re.sub(r'\s*```$', '', cleaned)
+                cleaned = cleaned.strip()
             try:
-                tasks = json.loads(output)
+                tasks = json.loads(cleaned)
                 if isinstance(tasks, list):
                     for t in tasks:
                         t.setdefault("status", "pending")
@@ -173,8 +179,19 @@ Example:
                         t.setdefault("revisions", 0)
                         self.memory.add_task(t)
                     return tasks
-            except json.JSONDecodeError:
-                logger.warning(f"Supervisor plan parse failed for {self.agent.name}")
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+            # Fallback: extract tasks from free text
+            logger.info(f"{self.agent.name} | supervisor returned non-JSON, extracting from text")
+            extracted = self._extract_tasks_from_text(output)
+            if extracted:
+                for t in extracted:
+                    t.setdefault("status", "pending")
+                    t.setdefault("attempts", 0)
+                    t.setdefault("revisions", 0)
+                    self.memory.add_task(t)
+                return extracted
 
         fallback = [{
             "id": "execute_mission",
@@ -185,6 +202,59 @@ Example:
         }]
         self.memory.add_task(fallback[0])
         return fallback
+
+    def _extract_tasks_from_text(self, text: str) -> list[dict]:
+        """Extract sub-tasks from free-form supervisor output.
+        Tries multiple extraction strategies in order.
+        """
+        tasks = []
+
+        # Strategy 1: look for markdown list items with task descriptions
+        lines = text.split("\n")
+        current_task = {}
+        for line in lines:
+            stripped = line.strip()
+            # Match numbered lists like "1. Do something" or bullet lists like "- Do something"
+            list_match = re.match(r'^(?:\d+[.)]\s*|[-*]\s+)(.+)$', stripped)
+            if list_match:
+                if current_task and current_task.get("description"):
+                    tasks.append(current_task)
+                desc = list_match.group(1).strip()
+                current_task = {
+                    "id": re.sub(r'[^a-z0-9_]', '_', desc.lower().replace(' ', '_'))[:50],
+                    "description": desc,
+                    "success_criteria": "Complete this task with tangible output",
+                    "tags": ["extracted"],
+                }
+            elif stripped and current_task:
+                # continuation of previous item (e.g. wrapped line)
+                current_task["description"] += " " + stripped
+
+        if current_task and current_task.get("description"):
+            tasks.append(current_task)
+
+        # Strategy 2: if no list found, split by double newlines into paragraphs
+        if not tasks:
+            paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+            for i, para in enumerate(paragraphs[:5]):
+                if len(para) > 50:
+                    tasks.append({
+                        "id": f"task_{i+1}",
+                        "description": para[:200],
+                        "success_criteria": "Complete this task",
+                        "tags": ["extracted"],
+                    })
+
+        # Strategy 3: if still nothing, make the whole output one task
+        if not tasks and len(text) > 50:
+            tasks.append({
+                "id": "execute_mission",
+                "description": text[:300],
+                "success_criteria": "Make measurable progress",
+                "tags": ["extracted", "mission"],
+            })
+
+        return tasks
 
     # ── SUPERVISOR: Generate revision feedback ─────────────────────
 
@@ -291,7 +361,7 @@ Return a JSON object:
                         "action": "navigate",
                         "url": target_url,
                         "title": visit_result.get("title", ""),
-                        "content_snippet": visit_result.get("content_snippet", "")[:300],
+                        "content_snippet": visit_result.get("content_snippet", "")[:2000],
                         "success": True,
                     })
                     logger.info(f"{self.agent.name} | Visited {target_url} — title: {visit_result.get('title','')[:60]}")
@@ -349,7 +419,7 @@ Return a JSON object:
 
         if relevant:
             mem = "\n".join(
-                f"{'[OK]' if e['success'] else '[FAIL]'} {e['action'][:120]}"
+                f"{'[OK]' if e['success'] else '[FAIL]'} {e['action'][:300]}"
                 for e in relevant
             )
             parts.append(f"## PAST EXPERIENCES\n{mem}")
@@ -457,7 +527,7 @@ Return a JSON object:
 {finance_report}
 
 ## Worker Output
-{output[:8000]}
+{output[:32000]}
 
 {CRITIC_RUBRIC}
 """
@@ -587,7 +657,7 @@ Return a JSON object:
                 # REVISE: supervisor generates feedback, worker retries
                 self.revision_count += 1
                 self.memory.working["current_revision"] = self.revision_count
-                self.memory.record_attempt(task["id"], result["output"][:150])
+                self.memory.record_attempt(task["id"], result["output"][:500])
 
                 if self.revision_count >= self.max_revisions:
                     logger.info(f"{self.agent.name} | max revisions ({self.max_revisions}) reached")
