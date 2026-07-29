@@ -239,6 +239,13 @@ class LLMRouter:
                 if _nv_breaker.is_open:
                     last_error = "nvidia: circuit open"
                     continue
+                # Try models one at a time per key; skip remaining models on a key if 429
+                nvidia_models = [
+                    (self.NVIDIA_MODEL_FLASH, 300),
+                    (self.NVIDIA_MODEL_NEMO_SUPER, 120),
+                    (self.NVIDIA_MODEL_NEMO_ULTRA, 120),
+                    (self.NVIDIA_MODEL_PRO, 300),
+                ]
                 for key_attr, key_idx in [
                     ("nvidia_key", 1),
                     ("nvidia_key_2", 2),
@@ -247,12 +254,7 @@ class LLMRouter:
                     if not key:
                         continue
                     with _nvidia_serialize_lock:
-                        for mdl, timeout in [
-                            (self.NVIDIA_MODEL_FLASH, 300),
-                            (self.NVIDIA_MODEL_NEMO_SUPER, 120),
-                            (self.NVIDIA_MODEL_NEMO_ULTRA, 120),
-                            (self.NVIDIA_MODEL_PRO, 300),
-                        ]:
+                        for mdl, timeout in nvidia_models:
                             try:
                                 result = self._call_nvidia(prompt, system, max_tokens,
                                                             temperature, mdl, key, timeout)
@@ -261,8 +263,14 @@ class LLMRouter:
                                     return result
                             except Exception as e:
                                 _nv_breaker.record(False)
+                                status = getattr(e, 'status_code', 0) or 0
+                                is_429 = status == 429 or '429' in str(e)
                                 logger.warning(f"NVIDIA {mdl} (key {key_idx}): {str(e)[:120]}")
                                 last_error = str(e)[:100]
+                                if is_429:
+                                    # Rate limited on this key — skip remaining models
+                                    logger.info(f"NVIDIA key {key_idx} rate-limited, trying next key")
+                                    break
 
         logger.error(f"All providers exhausted. Last error: {last_error}")
         return None
