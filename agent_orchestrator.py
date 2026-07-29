@@ -654,7 +654,7 @@ Return your evaluation via the submit_evaluation function.
 
         self.memory.store_experience(
             action=f"Task {final_state}: {task['description']}",
-            result={"success": False, "output": result.get("output", "") if 'result' in dir() else ""},
+            result={"success": False, "output": (result.get("output", "") if result else "")},
             tags=task.get("tags", []) + [final_state.lower()],
         )
         self.memory.update_task(task_id, {"status": final_state.lower()})
@@ -672,7 +672,7 @@ Return your evaluation via the submit_evaluation function.
             "output": output,
             "success": False,
             "verdict": final_state.lower(),
-            "critique": critique if 'critique' in dir() else None,
+            "critique": critique,
             "revisions": self.revision_count,
             "cycle_id": cycle_id,
             "duration_ms": duration_ms,
