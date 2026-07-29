@@ -92,42 +92,15 @@ class CircuitBreaker:
             return f"CircuitBreaker({self.name}, status={status}, failures={self._failures})"
 
 
-class TokenBucket:
-    """Token-bucket rate limiter. Configured just under provider RPM ceiling."""
-
-    def __init__(self, rate_per_min: float, capacity: int):
-        self.rate = rate_per_min / 60.0  # tokens per second
-        self.capacity = capacity
-        self.tokens = float(capacity)
-        self.last_refill = time.time()
-        self._lock = threading.Lock()
-
-    def acquire(self, tokens: float = 1.0, timeout: float = 60.0) -> bool:
-        deadline = time.time() + timeout
-        while True:
-            with self._lock:
-                now = time.time()
-                elapsed = now - self.last_refill
-                self.tokens = min(float(self.capacity), self.tokens + elapsed * self.rate)
-                self.last_refill = now
-                if self.tokens >= tokens:
-                    self.tokens -= tokens
-                    return True
-            if time.time() >= deadline:
-                return False
-            time.sleep(0.1)
 
 
 # ── Global circuit breakers ──────────────────────────────────────────
 _hf_breaker = CircuitBreaker("hf-inference", fail_threshold=5, cooldown_s=60)
 _or_breaker = CircuitBreaker("openrouter", fail_threshold=3, cooldown_s=120)
-_nv_breaker = CircuitBreaker("nvidia", fail_threshold=3, cooldown_s=120)
+_nv_breaker = CircuitBreaker("nvidia", fail_threshold=100, cooldown_s=300)  # high threshold — keep trying
 
 # Token-bucket rate limiters per NVIDIA key (38 RPM — just under 40 RPM ceiling)
-_nvidia_bucket_key1 = TokenBucket(rate_per_min=38, capacity=38)
-_nvidia_bucket_key2 = TokenBucket(rate_per_min=38, capacity=38)
-# Global lock to serialize all NVIDIA calls (disable concurrency)
-_nvidia_serialize_lock = threading.Lock()
+_nvidia_serialize_lock = threading.Lock()  # serialize all NVIDIA calls
 
 
 class ProviderUnavailable(Exception):
@@ -215,29 +188,29 @@ class LLMRouter:
                     _or_breaker.record(False)
                     last_error = str(e)[:100]
 
-        # 3. NVIDIA (last resort — serialized, token-bucketed, exponential backoff)
+        # 3. NVIDIA (serialized, retries, no circuit breaker issues)
         if not _nv_breaker.is_open:
-            for key_attr, key_idx, bucket in [
-                ("nvidia_key", 1, _nvidia_bucket_key1),
-                ("nvidia_key_2", 2, _nvidia_bucket_key2),
+            for key_attr, key_idx in [
+                ("nvidia_key", 1),
+                ("nvidia_key_2", 2),
             ]:
                 key = getattr(self, key_attr, None)
                 if not key:
                     continue
-                with _nvidia_serialize_lock:  # disable concurrency per user's guidance
+                with _nvidia_serialize_lock:  # ONE call at a time
                     for mdl, timeout in [
-                        (self.NVIDIA_MODEL_FLASH, 300),  # cold start may take 60-120s
+                        (self.NVIDIA_MODEL_FLASH, 300),
                         (self.NVIDIA_MODEL_PRO, 300),
                     ]:
                         try:
                             result = self._call_nvidia(prompt, system, max_tokens,
-                                                        temperature, mdl, key, timeout,
-                                                        bucket=bucket)
+                                                        temperature, mdl, key, timeout)
                             if result:
                                 _nv_breaker.record(True)
                                 return result
                         except Exception as e:
                             _nv_breaker.record(False)
+                            logger.warning(f"NVIDIA {mdl} (key {key_idx}): {str(e)[:120]}")
                             last_error = str(e)[:100]
 
         logger.error(f"All providers exhausted. Last error: {last_error}")
@@ -452,18 +425,13 @@ class LLMRouter:
     def _call_nvidia(self, prompt: str, system: str,
                       max_tokens: int, temperature: float,
                       model: str, api_key: str,
-                      timeout_secs: int,
-                      bucket: Optional[TokenBucket] = None,
-                      ) -> Optional[LLMResult]:
-        """Call NVIDIA with token-bucket rate limiting and exponential backoff on 429."""
-        # 1) Acquire token from bucket
-        if bucket and not bucket.acquire(timeout=60):
-            raise RuntimeError("NVIDIA token-bucket timeout — rate limit exceeded")
-
+                      timeout_secs: int) -> Optional[LLMResult]:
+        """Call NVIDIA with exponential backoff. Single-file serialized by caller."""
         import httpx
-        from openai import OpenAI, DefaultHttpxClient
+        from openai import OpenAI
 
-        max_retries = 5
+        max_retries = 10
+        base_delay = 2.0
         last_exc: Optional[Exception] = None
 
         for attempt in range(max_retries):
@@ -507,13 +475,18 @@ class LLMRouter:
                 last_exc = e
                 status = getattr(e, 'status_code', 0) or 0
                 is_429 = status == 429 or '429' in str(e)
-                if attempt < max_retries - 1:
-                    delay = (2.0 ** attempt) + random.uniform(0, 1.0)
-                    tag = "429" if is_429 else "error"
+                is_5xx = 500 <= status < 600
+                is_403 = status == 403 or '403' in str(e)
+                is_retryable = is_429 or is_5xx
+                if attempt < max_retries - 1 and is_retryable:
+                    delay = (base_delay ** attempt) + random.uniform(0, 1.0)
+                    tag = "429" if is_429 else f"{status}"
                     logger.info(f"NVIDIA {tag} (attempt {attempt+1}/{max_retries}): "
                                  f"{str(e)[:100]}, backoff {delay:.1f}s")
                     time.sleep(delay)
                     continue
-                raise  # last attempt — propagate
+                # Non-retryable (403, etc.) or exhausted — log and raise
+                logger.warning(f"NVIDIA {model} final: {type(e).__name__}: {str(e)[:150]}")
+                raise
 
         raise RuntimeError(f"NVIDIA exhausted after {max_retries} retries: {last_exc}")
