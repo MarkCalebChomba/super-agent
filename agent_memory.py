@@ -31,6 +31,19 @@ class AgentMemory:
 
         self.experiences = self._load_json(self.memories_file, [])
         self.task_queue = self._load_json(self.task_file, [])
+        # One-time migration: normalize any uppercase statuses
+        self._migrate_statuses()
+
+    def _migrate_statuses(self):
+        """Normalize all task statuses to lowercase for consistency."""
+        changed = False
+        for t in self.task_queue:
+            s = t.get("status", "")
+            if s and s != s.lower():
+                t["status"] = s.lower()
+                changed = True
+        if changed:
+            self._save_json(self.task_file, self.task_queue)
 
     # ── Persistence ────────────────────────────────────────────────
 
