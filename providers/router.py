@@ -262,6 +262,31 @@ class LLMRouter:
                     return json.loads(json_match.group())
                 except json.JSONDecodeError:
                     pass
+
+        # ── Fallback: retry with a plain-text prompt asking for JSON ──
+        schema_hint = json.dumps(schema["input_schema"], indent=2)
+        fallback_prompt = (
+            f"{prompt}\n\n"
+            "You MUST respond with ONLY valid JSON matching this schema:\n"
+            f"{schema_hint}\n\n"
+            "No explanation, no markdown formatting — just the raw JSON object."
+        )
+        logger.info("complete_structured: tool path failed, trying plain-text fallback")
+        fallback = self.complete(
+            prompt=fallback_prompt,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            tier=tier,
+        )
+        if fallback and fallback.text:
+            json_match = re.search(r'\{.*\}', fallback.text, re.DOTALL)
+            if json_match:
+                try:
+                    return json.loads(json_match.group())
+                except json.JSONDecodeError:
+                    pass
+
         logger.warning("complete_structured: no valid JSON from LLM")
         return None
 
