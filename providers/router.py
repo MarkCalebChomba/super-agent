@@ -482,7 +482,6 @@ class LLMRouter:
         from openai import OpenAI
 
         max_retries = 5
-        base_delay = 0.5
         last_exc: Optional[Exception] = None
 
         for attempt in range(max_retries):
@@ -530,7 +529,11 @@ class LLMRouter:
                 is_403 = status == 403 or '403' in str(e)
                 is_retryable = is_429 or is_5xx
                 if attempt < max_retries - 1 and is_retryable:
-                    delay = (base_delay ** attempt) + random.uniform(0, 1.0)
+                    # 429 rate limits need longer backoff (5s base, cap at 30s)
+                    if is_429:
+                        delay = min(30, (5 ** attempt) + random.uniform(0, 2))
+                    else:
+                        delay = (0.5 ** attempt) + random.uniform(0, 1.0)
                     tag = "429" if is_429 else f"{status}"
                     logger.info(f"NVIDIA {tag} (attempt {attempt+1}/{max_retries}): "
                                  f"{str(e)[:100]}, backoff {delay:.1f}s")
