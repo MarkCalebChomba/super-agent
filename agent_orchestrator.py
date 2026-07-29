@@ -233,6 +233,7 @@ Return the tasks via the submit_tasks function.
                 t.setdefault("revisions", 0)
                 t.setdefault("action_type", "research")
                 t.setdefault("state", "pending")
+                t.setdefault("success_criteria", "Produce concrete output that advances the mission")
                 self.memory.add_task(t)
 
             self.event_log.write(phase="planning_complete", event_id=event_id,
