@@ -273,6 +273,7 @@ class LLMRouter:
                  tools: Optional[list] = None,
                  tool_choice: Optional[str] = None,
                  ) -> Optional[LLMResult]:
+        """Try both HF endpoints: router (new, OpenAI-compat) then serverless (old, maybe free)."""
         t0 = time.time()
         body = {
             "model": model,
@@ -289,48 +290,57 @@ class LLMRouter:
         if tool_choice:
             body["tool_choice"] = tool_choice
 
-        resp = requests.post(
-            f"{self.HF_BASE}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {self.hf_token}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=120,
-        )
-        latency = (time.time() - t0) * 1000
+        headers = {
+            "Authorization": f"Bearer {self.hf_token}",
+            "Content-Type": "application/json",
+        }
 
-        if resp.status_code != 200:
-            logger.info(f"HF ({model}) status={resp.status_code}: {resp.text[:200]}")
-            # Non-200 is a failure for the circuit breaker
-            raise RuntimeError(f"HF status {resp.status_code}: {resp.text[:200]}")
+        endpoints = [
+            self.HF_BASE + "/chat/completions",                            # router.huggingface.co (OpenAI-compat)
+            f"https://api-inference.huggingface.co/models/{model}/v1/chat/completions",  # serverless (legacy)
+        ]
 
-        data = resp.json()
-        choice = data["choices"][0]
-        message = choice["message"]
+        last_error = ""
+        for url in endpoints:
+            try:
+                resp = requests.post(url, headers=headers, json=body, timeout=120)
+                latency = (time.time() - t0) * 1000
 
-        # Extract text: either tool call args or plain content
-        if message.get("tool_calls"):
-            text = message["tool_calls"][0]["function"]["arguments"]
-        else:
-            text = message.get("content", "")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    choice = data["choices"][0]
+                    message = choice["message"]
 
-        # Token usage
-        usage = data.get("usage", {})
-        in_tokens = usage.get("prompt_tokens", _estimate_tokens(prompt + system))
-        out_tokens = usage.get("completion_tokens", _estimate_tokens(text))
+                    if message.get("tool_calls"):
+                        text = message["tool_calls"][0]["function"]["arguments"]
+                    else:
+                        text = message.get("content", "")
 
-        logger.info(f"HF SUCCESS ({model}): {len(text)} chars, "
-                     f"{in_tokens}+{out_tokens} tokens, {latency:.0f}ms")
+                    usage = data.get("usage", {})
+                    in_tokens = usage.get("prompt_tokens", _estimate_tokens(prompt + system))
+                    out_tokens = usage.get("completion_tokens", _estimate_tokens(text))
 
-        return LLMResult(
-            text=text,
-            input_tokens=in_tokens,
-            output_tokens=out_tokens,
-            model=model,
-            provider="hf",
-            latency_ms=latency,
-        )
+                    logger.info(f"HF SUCCESS ({url.split('/')[2]}): {len(text)} chars, "
+                                 f"{in_tokens}+{out_tokens} tokens, {latency:.0f}ms")
+                    return LLMResult(
+                        text=text,
+                        input_tokens=in_tokens,
+                        output_tokens=out_tokens,
+                        model=model,
+                        provider="hf",
+                        latency_ms=latency,
+                    )
+
+                logger.info(f"HF ({url.split('/')[2]}) status={resp.status_code}: {resp.text[:150]}")
+                last_error = f"status {resp.status_code}: {resp.text[:100]}"
+                if resp.status_code == 402:
+                    continue  # try next endpoint (different credit pool)
+            except Exception as e:
+                last_error = str(e)[:100]
+                logger.info(f"HF ({url.split('/')[2]}) failed: {last_error}")
+                continue
+
+        raise RuntimeError(f"HF exhausted: {last_error}")
 
     # ── OpenRouter ──────────────────────────────────────────────────
 
