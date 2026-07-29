@@ -323,7 +323,7 @@ Return the tasks via the submit_tasks function.
 """)
 
         prompt = "\n\n".join(parts)
-        llm_result = self._llm_call(prompt, role="worker", max_tokens=16384,
+        llm_result = self._llm_call(prompt, role="worker", max_tokens=65536,
                                      event_id=event_id)
 
         if not llm_result:
@@ -780,7 +780,7 @@ Return via the submit_revision_instructions function.
                 prompt=prompt,
                 schema=schema,
                 system="You are an autonomous AI agent. Return the required schema precisely.",
-                max_tokens=4096,
+                max_tokens=65536,
             )
             if result:
                 self._model_unavailable = False

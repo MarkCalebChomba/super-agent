@@ -149,7 +149,6 @@ class LLMRouter:
     NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
     NVIDIA_MODEL_FLASH = "deepseek-ai/deepseek-v4-flash"
     NVIDIA_MODEL_PRO = "deepseek-ai/deepseek-v4-pro"
-    NVIDIA_MODEL_FAST = "meta/llama-3.1-8b-instruct"
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
     def __init__(self):
@@ -227,9 +226,8 @@ class LLMRouter:
                     continue
                 with _nvidia_serialize_lock:  # disable concurrency per user's guidance
                     for mdl, timeout in [
-                        (self.NVIDIA_MODEL_FAST, 120),
-                        (self.NVIDIA_MODEL_FLASH, 180),
-                        (self.NVIDIA_MODEL_PRO, 240),
+                        (self.NVIDIA_MODEL_FLASH, 300),  # cold start may take 60-120s
+                        (self.NVIDIA_MODEL_PRO, 300),
                     ]:
                         try:
                             result = self._call_nvidia(prompt, system, max_tokens,
@@ -342,7 +340,7 @@ class LLMRouter:
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": min(max_tokens, 32000),
+            "max_tokens": min(max_tokens, 64000),
             "temperature": temperature,
             "top_p": 0.95,
         }
@@ -488,7 +486,7 @@ class LLMRouter:
                     ],
                     temperature=temperature,
                     top_p=0.95,
-                    max_tokens=min(max_tokens, 16384),
+                    max_tokens=min(max_tokens, 64000),
                     stream=False,
                 )
                 latency = (time.time() - t0) * 1000
