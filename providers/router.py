@@ -136,8 +136,6 @@ class LLMRouter:
     NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
     NVIDIA_MODEL_FLASH = "deepseek-ai/deepseek-v4-flash"
     NVIDIA_MODEL_PRO = "deepseek-ai/deepseek-v4-pro"
-    NVIDIA_MODEL_NEMO_SUPER = "nvidia/nemotron-3-super-120b-a12b"
-    NVIDIA_MODEL_NEMO_ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
     GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -241,10 +239,8 @@ class LLMRouter:
                     continue
                 # Try models one at a time per key; skip remaining models on a key if 429
                 nvidia_models = [
-                    (self.NVIDIA_MODEL_FLASH, 300),
-                    (self.NVIDIA_MODEL_NEMO_SUPER, 120),
-                    (self.NVIDIA_MODEL_NEMO_ULTRA, 120),
-                    (self.NVIDIA_MODEL_PRO, 300),
+                    (self.NVIDIA_MODEL_FLASH, 120),
+                    (self.NVIDIA_MODEL_PRO, 120),
                 ]
                 for key_attr, key_idx in [
                     ("nvidia_key", 1),
