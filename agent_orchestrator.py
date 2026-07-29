@@ -743,7 +743,6 @@ Return via the submit_revision_instructions function.
                 prompt=prompt,
                 system="You are an autonomous AI agent. Execute your purpose.",
                 max_tokens=max_tokens,
-                role=role,
             )
             if result:
                 self._model_unavailable = False
