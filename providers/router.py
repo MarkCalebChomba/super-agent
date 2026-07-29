@@ -526,21 +526,15 @@ class LLMRouter:
                 status = getattr(e, 'status_code', 0) or 0
                 is_429 = status == 429 or '429' in str(e)
                 is_5xx = 500 <= status < 600
-                is_403 = status == 403 or '403' in str(e)
-                is_retryable = is_429 or is_5xx
+                is_retryable = is_5xx  # only retry 5xx (server overload), NOT 429
                 if attempt < max_retries - 1 and is_retryable:
-                    # 429 rate limits need longer backoff (5s base, cap at 30s)
-                    if is_429:
-                        delay = min(30, (5 ** attempt) + random.uniform(0, 2))
-                    else:
-                        delay = (0.5 ** attempt) + random.uniform(0, 1.0)
-                    tag = "429" if is_429 else f"{status}"
-                    logger.info(f"NVIDIA {tag} (attempt {attempt+1}/{max_retries}): "
+                    delay = (0.5 ** attempt) + random.uniform(0, 1.0)
+                    logger.info(f"NVIDIA {status} (attempt {attempt+1}/{max_retries}): "
                                  f"{str(e)[:100]}, backoff {delay:.1f}s")
                     time.sleep(delay)
                     continue
-                # Non-retryable (403, etc.) or exhausted — log and raise
-                logger.warning(f"NVIDIA {model} final: {type(e).__name__}: {str(e)[:150]}")
+                # 429 = raise immediately to fall through to next provider
+                logger.info(f"NVIDIA {model} rate-limited (429), falling through to next provider")
                 raise
 
         raise RuntimeError(f"NVIDIA exhausted after {max_retries} retries: {last_exc}")
