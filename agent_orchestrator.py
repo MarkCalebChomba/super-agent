@@ -476,7 +476,7 @@ Return your evaluation via the submit_evaluation function.
         })
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
-        relative_path = str(filepath.relative_to(Path.cwd()))
+        relative_path = str(filepath)
         self.event_log.write(phase="shipping_complete", event_id=event_id,
                               artifact_path=relative_path,
                               char_count=len(output))
