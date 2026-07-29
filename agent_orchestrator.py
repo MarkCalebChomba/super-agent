@@ -362,7 +362,7 @@ Return the tasks via the submit_tasks function.
             llm_result.cost,
             f"LLM execute: {task['id']} ({llm_result.provider}/{llm_result.model})",
             category="llm",
-            token_count=llm_result.input_tokens + llm_result.output_tokens,
+            metadata={"tokens": llm_result.input_tokens + llm_result.output_tokens},
         )
 
         self.event_log.write(phase="executing_complete", event_id=event_id,
