@@ -320,6 +320,15 @@ Return the tasks via the submit_tasks function.
 6. EVERY output must answer: "How does this make money?"
 7. Include honest disclosures if affiliate links or reviews are involved
 8. Do NOT fabricate testimonials, reviews, or urgency claims
+
+## REAL-WORLD ACTIONS
+You can perform real browser actions by including one or more of these lines:
+  BROWSER: navigate | https://example.com/signup
+  BROWSER: scrape | https://example.com/pricing
+  BROWSER: screenshot | https://example.com
+  BROWSER: login_google | email@gmail.com | your_password
+  BROWSER: login_platform | fiverr | email@example.com | password
+These will be executed and the results appended to your output.
 """)
 
         prompt = "\n\n".join(parts)
@@ -332,6 +341,11 @@ Return the tasks via the submit_tasks function.
             return None
 
         output = llm_result.text
+
+        # Execute browser actions if the LLM requested real-world interaction
+        browser_output = self._execute_browser_actions(output, task)
+        if browser_output:
+            output += "\n\n## BROWSER RESULT\n" + browser_output
 
         # Check for human task request
         ht_match = HUMAN_TASK_PATTERN.search(output)
@@ -371,6 +385,101 @@ Return the tasks via the submit_tasks function.
                               cost=llm_result.cost,
                               has_human_task=human_task is not None)
         return result
+
+    def _execute_browser_actions(self, output: str, task: dict) -> str:
+        """Execute real browser actions if the LLM output contains BROWSER directives.
+
+        The LLM can request browser actions by including lines like:
+          BROWSER: navigate | https://example.com/signup
+          BROWSER: screenshot | signup_page
+          BROWSER: fill | #email | user@example.com
+          BROWSER: click | #submit
+          BROWSER: scrape | https://example.com/pricing
+
+        Returns a string of browser results, or empty string if no actions requested.
+        """
+        import re
+        actions = re.findall(r'^BROWSER:\s*(\w+)\s*(?:\|\s*(.*?))?(?:\|\s*(.*?))?(?:\|\s*(.*?))?\s*$',
+                             output, re.MULTILINE)
+        if not actions:
+            return ""
+
+        try:
+            from tools.stealth_browser import (
+                StealthBrowser, navigate_to_url, scrape_url, login_google, login_and_collect,
+            )
+        except ImportError:
+            return ""
+
+        browser = StealthBrowser()
+        results = []
+
+        for action, arg1, arg2, arg3 in actions:
+            action = action.lower().strip()
+            try:
+                if action == "navigate":
+                    url = arg1.strip() if arg1 else ""
+                    if url:
+                        nav_result = navigate_to_url(url)
+                        if nav_result:
+                            snippet = nav_result.get("content_snippet", "")[:1000]
+                            screenshot = nav_result.get("screenshot", "")
+                            results.append(f"[NAVIGATE] {url}: {snippet[:200]}...")
+                            if screenshot:
+                                results.append(f"[SCREENSHOT] {screenshot}")
+                        else:
+                            results.append(f"[NAVIGATE] {url}: FAILED")
+
+                elif action == "scrape":
+                    url = arg1.strip() if arg1 else ""
+                    if url:
+                        content = scrape_url(url)
+                        if content:
+                            results.append(f"[SCRAPE] {url}: {len(content)} chars extracted")
+                            results.append(content[:2000])
+                        else:
+                            results.append(f"[SCRAPE] {url}: FAILED")
+
+                elif action == "login_google":
+                    email = arg1.strip() if arg1 else ""
+                    password = arg2.strip() if arg2 else ""
+                    if email and password:
+                        login_result = login_google(email, password)
+                        if login_result:
+                            ok = login_result.get("success", False)
+                            msg = login_result.get("message", "")
+                            screenshot = login_result.get("screenshot", "")
+                            results.append(f"[GOOGLE LOGIN] {'OK' if ok else 'FAIL'}: {msg}")
+                            if screenshot:
+                                results.append(f"[SCREENSHOT] {screenshot}")
+                        else:
+                            results.append("[GOOGLE LOGIN] FAILED")
+
+                elif action == "login_platform":
+                    platform = arg1.strip() if arg1 else ""
+                    email = arg2.strip() if arg2 else ""
+                    password = arg3.strip() if arg3 else ""
+                    if platform and email and password:
+                        login_result = login_and_collect(platform, email, password)
+                        if login_result:
+                            ok = login_result.get("logged_in", False)
+                            username = login_result.get("username", "")
+                            results.append(f"[{platform.upper()} LOGIN] {'OK' if ok else 'FAIL'}: {username}")
+
+                elif action == "screenshot":
+                    # Screenshot the current state — use navigate to capture
+                    url = arg1.strip() if arg1 else "about:blank"
+                    nav_result = navigate_to_url(url, wait_seconds=2)
+                    if nav_result and nav_result.get("screenshot"):
+                        results.append(f"[SCREENSHOT] {nav_result['screenshot']}")
+
+                else:
+                    results.append(f"[BROWSER] Unknown action: {action}")
+
+            except Exception as e:
+                results.append(f"[BROWSER ERROR] {action}: {str(e)[:100]}")
+
+        return "\n".join(results)
 
     # ── Phase: EVALUATING ───────────────────────────────────────────
 
