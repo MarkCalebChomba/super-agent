@@ -144,7 +144,7 @@ HUMAN_TASK_PATTERN = re.compile(
 
 # ── Concurrency control ──────────────────────────────────────────────
 
-_llm_semaphore = threading.Semaphore(3)
+_llm_semaphore = threading.Semaphore(1)  # single-agent: one LLM call at a time
 _agent_run_lock = threading.Lock()
 _running_agents: dict[str, threading.Thread] = {}
 
