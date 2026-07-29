@@ -92,15 +92,42 @@ class CircuitBreaker:
             return f"CircuitBreaker({self.name}, status={status}, failures={self._failures})"
 
 
+class TokenBucket:
+    """Token-bucket rate limiter. Configured just under provider RPM ceiling."""
+
+    def __init__(self, rate_per_min: float, capacity: int):
+        self.rate = rate_per_min / 60.0  # tokens per second
+        self.capacity = capacity
+        self.tokens = float(capacity)
+        self.last_refill = time.time()
+        self._lock = threading.Lock()
+
+    def acquire(self, tokens: float = 1.0, timeout: float = 60.0) -> bool:
+        deadline = time.time() + timeout
+        while True:
+            with self._lock:
+                now = time.time()
+                elapsed = now - self.last_refill
+                self.tokens = min(float(self.capacity), self.tokens + elapsed * self.rate)
+                self.last_refill = now
+                if self.tokens >= tokens:
+                    self.tokens -= tokens
+                    return True
+            if time.time() >= deadline:
+                return False
+            time.sleep(0.1)
+
+
 # ── Global circuit breakers ──────────────────────────────────────────
 _hf_breaker = CircuitBreaker("hf-inference", fail_threshold=5, cooldown_s=60)
 _or_breaker = CircuitBreaker("openrouter", fail_threshold=3, cooldown_s=120)
 _nv_breaker = CircuitBreaker("nvidia", fail_threshold=3, cooldown_s=120)
 
-# Per-key rate limiters for NVIDIA
-_nvidia_window_key1: list[float] = []
-_nvidia_window_key2: list[float] = []
-_nvidia_lock = threading.Lock()
+# Token-bucket rate limiters per NVIDIA key (38 RPM — just under 40 RPM ceiling)
+_nvidia_bucket_key1 = TokenBucket(rate_per_min=38, capacity=38)
+_nvidia_bucket_key2 = TokenBucket(rate_per_min=38, capacity=38)
+# Global lock to serialize all NVIDIA calls (disable concurrency)
+_nvidia_serialize_lock = threading.Lock()
 
 
 class ProviderUnavailable(Exception):
@@ -188,23 +215,27 @@ class LLMRouter:
                     _or_breaker.record(False)
                     last_error = str(e)[:100]
 
-        # 3. NVIDIA (last resort)
+        # 3. NVIDIA (last resort — serialized, token-bucketed, exponential backoff)
         if not _nv_breaker.is_open:
-            for key_attr, key_idx in [("nvidia_key", 1), ("nvidia_key_2", 2)]:
+            for key_attr, key_idx, bucket in [
+                ("nvidia_key", 1, _nvidia_bucket_key1),
+                ("nvidia_key_2", 2, _nvidia_bucket_key2),
+            ]:
                 key = getattr(self, key_attr, None)
                 if not key:
                     continue
-                for mdl, timeout in [(self.NVIDIA_MODEL_FLASH, 30), (self.NVIDIA_MODEL_PRO, 60)]:
-                    self._rate_limit_nvidia(key_idx)
-                    try:
-                        result = self._call_nvidia(prompt, system, max_tokens,
-                                                    temperature, mdl, key, timeout)
-                        if result:
-                            _nv_breaker.record(True)
-                            return result
-                    except Exception as e:
-                        _nv_breaker.record(False)
-                        last_error = str(e)[:100]
+                with _nvidia_serialize_lock:  # disable concurrency per user's guidance
+                    for mdl, timeout in [(self.NVIDIA_MODEL_FLASH, 60), (self.NVIDIA_MODEL_PRO, 90)]:
+                        try:
+                            result = self._call_nvidia(prompt, system, max_tokens,
+                                                        temperature, mdl, key, timeout,
+                                                        bucket=bucket)
+                            if result:
+                                _nv_breaker.record(True)
+                                return result
+                        except Exception as e:
+                            _nv_breaker.record(False)
+                            last_error = str(e)[:100]
 
         logger.error(f"All providers exhausted. Last error: {last_error}")
         return None
@@ -415,54 +446,69 @@ class LLMRouter:
 
     # ── NVIDIA ──────────────────────────────────────────────────────
 
-    def _rate_limit_nvidia(self, key_index: int = 1):
-        global _nvidia_window_key1, _nvidia_window_key2
-        now = time.time()
-        window = _nvidia_window_key1 if key_index == 1 else _nvidia_window_key2
-        with _nvidia_lock:
-            window[:] = [t for t in window if now - t < 60]
-            if len(window) >= 35:
-                sleep_time = 60 - (now - window[0])
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-                window.pop(0)
-            window.append(now)
-
     def _call_nvidia(self, prompt: str, system: str,
                       max_tokens: int, temperature: float,
                       model: str, api_key: str,
-                      timeout_secs: int) -> Optional[LLMResult]:
-        t0 = time.time()
+                      timeout_secs: int,
+                      bucket: Optional[TokenBucket] = None,
+                      ) -> Optional[LLMResult]:
+        """Call NVIDIA with token-bucket rate limiting and exponential backoff on 429."""
+        # 1) Acquire token from bucket
+        if bucket and not bucket.acquire(timeout=60):
+            raise RuntimeError("NVIDIA token-bucket timeout — rate limit exceeded")
+
         import httpx
         from openai import OpenAI, DefaultHttpxClient
-        http_client = httpx.Client(timeout=httpx.Timeout(timeout_secs, connect=15))
-        client = OpenAI(
-            base_url=self.NVIDIA_BASE,
-            api_key=api_key,
-            http_client=http_client,
-            max_retries=0,
-        )
-        completion = client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=temperature,
-            top_p=0.95,
-            max_tokens=min(max_tokens, 16384),
-            stream=False,
-        )
-        latency = (time.time() - t0) * 1000
-        content = completion.choices[0].message.content
-        if content:
-            usage = completion.usage
-            return LLMResult(
-                text=content,
-                input_tokens=usage.prompt_tokens if usage else _estimate_tokens(prompt + system),
-                output_tokens=usage.completion_tokens if usage else _estimate_tokens(content),
-                model=model,
-                provider="nvidia",
-                latency_ms=latency,
-            )
-        return None
+
+        max_retries = 5
+        last_exc: Optional[Exception] = None
+
+        for attempt in range(max_retries):
+            t0 = time.time()
+            try:
+                http_client = httpx.Client(timeout=httpx.Timeout(timeout_secs, connect=15))
+                client = OpenAI(
+                    base_url=self.NVIDIA_BASE,
+                    api_key=api_key,
+                    http_client=http_client,
+                    max_retries=0,
+                )
+                completion = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    temperature=temperature,
+                    top_p=0.95,
+                    max_tokens=min(max_tokens, 16384),
+                    stream=False,
+                )
+                latency = (time.time() - t0) * 1000
+                content = completion.choices[0].message.content
+                if content:
+                    usage = completion.usage
+                    return LLMResult(
+                        text=content,
+                        input_tokens=usage.prompt_tokens if usage else _estimate_tokens(prompt + system),
+                        output_tokens=usage.completion_tokens if usage else _estimate_tokens(content),
+                        model=model,
+                        provider="nvidia",
+                        latency_ms=latency,
+                    )
+                return None
+
+            except Exception as e:
+                last_exc = e
+                status = getattr(e, 'status_code', 0) or 0
+                is_429 = status == 429 or '429' in str(e)
+                if attempt < max_retries - 1:
+                    delay = (2.0 ** attempt) + random.uniform(0, 1.0)
+                    tag = "429" if is_429 else "error"
+                    logger.info(f"NVIDIA {tag} (attempt {attempt+1}/{max_retries}), "
+                                 f"backoff {delay:.1f}s")
+                    time.sleep(delay)
+                    continue
+                raise  # last attempt — propagate
+
+        raise RuntimeError(f"NVIDIA exhausted after {max_retries} retries: {last_exc}")
