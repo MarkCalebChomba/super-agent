@@ -136,6 +136,8 @@ class LLMRouter:
     NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
     NVIDIA_MODEL_FLASH = "deepseek-ai/deepseek-v4-flash"
     NVIDIA_MODEL_PRO = "deepseek-ai/deepseek-v4-pro"
+    NVIDIA_MODEL_NEMO_ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
+    NVIDIA_NEMO_EXTRA = {"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 8192}
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
     GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
@@ -239,8 +241,9 @@ class LLMRouter:
                     continue
                 # Try models one at a time per key; skip remaining models on a key if 429
                 nvidia_models = [
-                    (self.NVIDIA_MODEL_FLASH, 120),
-                    (self.NVIDIA_MODEL_PRO, 120),
+                    (self.NVIDIA_MODEL_FLASH, 120, None),
+                    (self.NVIDIA_MODEL_PRO, 120, None),
+                    (self.NVIDIA_MODEL_NEMO_ULTRA, 300, self.NVIDIA_NEMO_EXTRA),
                 ]
                 for key_attr, key_idx in [
                     ("nvidia_key", 1),
@@ -250,10 +253,11 @@ class LLMRouter:
                     if not key:
                         continue
                     with _nvidia_serialize_lock:
-                        for mdl, timeout in nvidia_models:
+                        for mdl, timeout, extra in nvidia_models:
                             try:
                                 result = self._call_nvidia(prompt, system, max_tokens,
-                                                            temperature, mdl, key, timeout)
+                                                            temperature, mdl, key, timeout,
+                                                            extra_body=extra)
                                 if result:
                                     _nv_breaker.record(True)
                                     return result
@@ -480,8 +484,12 @@ class LLMRouter:
     def _call_nvidia(self, prompt: str, system: str,
                       max_tokens: int, temperature: float,
                       model: str, api_key: str,
-                      timeout_secs: int) -> Optional[LLMResult]:
-        """Call NVIDIA with exponential backoff. Single-file serialized by caller."""
+                      timeout_secs: int,
+                      extra_body: Optional[dict] = None) -> Optional[LLMResult]:
+        """Call NVIDIA with exponential backoff. Single-file serialized by caller.
+
+        Some models (Nemotron) require extra_body for thinking/reasoning.
+        """
         import httpx
         from openai import OpenAI
 
@@ -500,7 +508,7 @@ class LLMRouter:
                     http_client=http_client,
                     max_retries=0,
                 )
-                completion = client.chat.completions.create(
+                kwargs = dict(
                     model=model,
                     messages=[
                         {"role": "system", "content": system},
@@ -511,6 +519,9 @@ class LLMRouter:
                     max_tokens=min(max_tokens, 64000),
                     stream=False,
                 )
+                if extra_body:
+                    kwargs["extra_body"] = extra_body
+                completion = client.chat.completions.create(**kwargs)
                 latency = (time.time() - t0) * 1000
                 content = completion.choices[0].message.content
                 if content:
@@ -537,8 +548,9 @@ class LLMRouter:
                                  f"{str(e)[:100]}, backoff {delay:.1f}s")
                     time.sleep(delay)
                     continue
-                # 429 = raise immediately to fall through to next provider
-                logger.info(f"NVIDIA {model} rate-limited (429), falling through to next provider")
+                # Non-retryable (429, 403, etc.) — raise to fall through to next provider
+                tag = "429" if is_429 else f"err-{status}"
+                logger.info(f"NVIDIA {model} {tag}, falling through to next provider")
                 raise
 
         raise RuntimeError(f"NVIDIA exhausted after {max_retries} retries: {last_exc}")
