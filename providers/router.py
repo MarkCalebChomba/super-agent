@@ -430,8 +430,8 @@ class LLMRouter:
         import httpx
         from openai import OpenAI
 
-        max_retries = 10
-        base_delay = 2.0
+        max_retries = 5
+        base_delay = 0.5
         last_exc: Optional[Exception] = None
 
         for attempt in range(max_retries):

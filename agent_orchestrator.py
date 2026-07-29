@@ -323,12 +323,16 @@ Return the tasks via the submit_tasks function.
 8. Do NOT fabricate testimonials, reviews, or urgency claims
 
 ## REAL-WORLD ACTIONS
-You can perform real browser actions by including one or more of these lines:
+You can perform real browser actions by including lines like:
   BROWSER: navigate | https://example.com/signup
   BROWSER: scrape | https://example.com/pricing
   BROWSER: screenshot | https://example.com
   BROWSER: login_google | email@gmail.com | your_password
-  BROWSER: login_platform | fiverr | email@example.com | password
+  BROWSER: signup | https://example.com/register | email | password
+
+For sign-up / account-creation tasks, you can also just describe what to do
+in detail (URLs, steps, what form fields to fill) and the system will
+automatically execute it as a browser task. Include credentials inline.
 These will be executed and the results appended to your output.
 """)
 
@@ -388,99 +392,139 @@ These will be executed and the results appended to your output.
         return result
 
     def _execute_browser_actions(self, output: str, task: dict) -> str:
-        """Execute real browser actions if the LLM output contains BROWSER directives.
+        """Execute real browser actions using AI-powered browser automation.
 
-        The LLM can request browser actions by including lines like:
-          BROWSER: navigate | https://example.com/signup
-          BROWSER: screenshot | signup_page
-          BROWSER: fill | #email | user@example.com
-          BROWSER: click | #submit
-          BROWSER: scrape | https://example.com/pricing
+        Two modes:
+        1. LLM outputs BROWSER: directives (simple actions)
+        2. Task involves browser automation (sign-up, create account) → auto-dispatch
 
-        Returns a string of browser results, or empty string if no actions requested.
+        Uses AgentBrowser (browser-use when available, Playwright fallback).
         """
         import re
+        results = []
+
+        # Mode 1: Explicit BROWSER directives from LLM output
         actions = re.findall(r'^BROWSER:\s*(\w+)\s*(?:\|\s*(.*?))?(?:\|\s*(.*?))?(?:\|\s*(.*?))?\s*$',
                              output, re.MULTILINE)
-        if not actions:
+
+        # Mode 2: Auto-detect browser task from task description
+        task_lower = (task.get("description", "") + " " + output).lower()
+        signup_keywords = ["sign up", "create account", "register", "signup",
+                           "apply for", "join", "enroll", "subscribe"]
+        is_browser_task = any(kw in task_lower for kw in signup_keywords)
+
+        if not actions and not is_browser_task:
             return ""
 
         try:
-            from tools.stealth_browser import (
-                StealthBrowser, navigate_to_url, scrape_url, login_google, login_and_collect,
-            )
+            from tools.agent_browser import AgentBrowser
         except ImportError:
             return ""
 
-        browser = StealthBrowser()
-        results = []
+        browser = AgentBrowser()
+        browser_results = []
 
+        # Handle complex browser tasks (sign-up, account creation)
+        if is_browser_task:
+            # Build a detailed browser task from the LLM output + task description
+            task_description = task.get("description", "")
+            success_criteria = task.get("success_criteria", "")
+
+            # Extract URLs from output and task
+            urls = re.findall(r'https?://[^\s\)\"]+', output + " " + task_description)
+            url_hint = urls[0] if urls else ""
+
+            browser_task = f"{task_description}\n{success_criteria}"
+            if url_hint:
+                browser_task = f"Go to {url_hint}\n{browser_task}"
+            browser_task += "\nTake screenshots at each step and report what happened."
+
+            logger.info(f"Running browser task: {browser_task[:200]}...")
+            task_result = browser.run_task(browser_task, max_steps=25)
+            if task_result.get("success"):
+                summary = task_result.get("summary", "")
+                steps = task_result.get("steps", 0)
+                step_log = task_result.get("step_log", [])
+                browser_results.append(f"[BROWSER TASK] Completed in {steps} steps")
+                browser_results.append(f"[RESULT] {summary[:1000]}")
+                for s in step_log[-5:]:  # last 5 steps
+                    thought = s.get("thought", "")[:200]
+                    if thought:
+                        browser_results.append(f"[STEP {s['step']}] {thought}")
+            else:
+                browser_results.append(f"[BROWSER TASK] Failed: {task_result.get('error', 'unknown')}")
+
+        # Handle simple BROWSER directives
         for action, arg1, arg2, arg3 in actions:
             action = action.lower().strip()
             try:
                 if action == "navigate":
                     url = arg1.strip() if arg1 else ""
                     if url:
-                        nav_result = navigate_to_url(url)
-                        if nav_result:
-                            snippet = nav_result.get("content_snippet", "")[:1000]
-                            screenshot = nav_result.get("screenshot", "")
-                            results.append(f"[NAVIGATE] {url}: {snippet[:200]}...")
+                        from tools.stealth_browser import navigate_to_url
+                        nav = navigate_to_url(url)
+                        if nav:
+                            snippet = nav.get("content_snippet", "")[:500]
+                            screenshot = nav.get("screenshot", "")
+                            browser_results.append(f"[NAVIGATE] {url}: page loaded")
                             if screenshot:
-                                results.append(f"[SCREENSHOT] {screenshot}")
+                                browser_results.append(f"[SCREENSHOT] {screenshot}")
                         else:
-                            results.append(f"[NAVIGATE] {url}: FAILED")
+                            browser_results.append(f"[NAVIGATE] {url}: FAILED")
 
                 elif action == "scrape":
                     url = arg1.strip() if arg1 else ""
                     if url:
+                        from tools.stealth_browser import scrape_url
                         content = scrape_url(url)
                         if content:
-                            results.append(f"[SCRAPE] {url}: {len(content)} chars extracted")
-                            results.append(content[:2000])
+                            browser_results.append(f"[SCRAPE] {url}: {len(content)} chars")
+                            browser_results.append(content[:2000])
                         else:
-                            results.append(f"[SCRAPE] {url}: FAILED")
+                            browser_results.append(f"[SCRAPE] {url}: FAILED")
 
                 elif action == "login_google":
                     email = arg1.strip() if arg1 else ""
                     password = arg2.strip() if arg2 else ""
                     if email and password:
+                        from tools.stealth_browser import login_google
                         login_result = login_google(email, password)
                         if login_result:
                             ok = login_result.get("success", False)
-                            msg = login_result.get("message", "")
-                            screenshot = login_result.get("screenshot", "")
-                            results.append(f"[GOOGLE LOGIN] {'OK' if ok else 'FAIL'}: {msg}")
-                            if screenshot:
-                                results.append(f"[SCREENSHOT] {screenshot}")
-                        else:
-                            results.append("[GOOGLE LOGIN] FAILED")
+                            browser_results.append(f"[GOOGLE LOGIN] {'OK' if ok else 'FAIL'}")
+                            if login_result.get("screenshot"):
+                                browser_results.append(f"[SCREENSHOT] {login_result['screenshot']}")
 
-                elif action == "login_platform":
-                    platform = arg1.strip() if arg1 else ""
+                elif action == "signup":
+                    url = arg1.strip() if arg1 else ""
                     email = arg2.strip() if arg2 else ""
                     password = arg3.strip() if arg3 else ""
-                    if platform and email and password:
-                        login_result = login_and_collect(platform, email, password)
-                        if login_result:
-                            ok = login_result.get("logged_in", False)
-                            username = login_result.get("username", "")
-                            results.append(f"[{platform.upper()} LOGIN] {'OK' if ok else 'FAIL'}: {username}")
+                    result = browser.sign_up_for_platform(url, email, password)
+                    if result.get("success"):
+                        browser_results.append(f"[SIGNUP] {url}: {result.get('summary','ok')[:500]}")
+                    else:
+                        browser_results.append(f"[SIGNUP] {url}: FAILED - {result.get('error','')}")
 
                 elif action == "screenshot":
-                    # Screenshot the current state — use navigate to capture
                     url = arg1.strip() if arg1 else "about:blank"
-                    nav_result = navigate_to_url(url, wait_seconds=2)
-                    if nav_result and nav_result.get("screenshot"):
-                        results.append(f"[SCREENSHOT] {nav_result['screenshot']}")
+                    from tools.stealth_browser import navigate_to_url
+                    nav = navigate_to_url(url, wait_seconds=2)
+                    if nav and nav.get("screenshot"):
+                        browser_results.append(f"[SCREENSHOT] {nav['screenshot']}")
 
                 else:
-                    results.append(f"[BROWSER] Unknown action: {action}")
+                    # Unknown action — try running as a general browser task
+                    generic_task = f"{action}: {arg1 or ''} {arg2 or ''} {arg3 or ''}"
+                    result = browser.run_task(generic_task, max_steps=10)
+                    if result.get("success"):
+                        browser_results.append(f"[BROWSER] {result.get('summary','done')[:300]}")
+                    else:
+                        browser_results.append(f"[BROWSER] {action}: FAILED")
 
             except Exception as e:
-                results.append(f"[BROWSER ERROR] {action}: {str(e)[:100]}")
+                browser_results.append(f"[BROWSER ERROR] {action}: {str(e)[:100]}")
 
-        return "\n".join(results)
+        return "\n".join(browser_results)
 
     # ── Phase: EVALUATING ───────────────────────────────────────────
 

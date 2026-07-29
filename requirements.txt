@@ -19,3 +19,6 @@ psutil>=5.9.0
 
 # HF persistent storage (data survives Railway deploys)
 huggingface_hub>=0.23.0
+
+# Browser AI automation (agents that control browsers)
+browser-use>=0.4.0
