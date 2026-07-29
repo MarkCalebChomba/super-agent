@@ -149,6 +149,7 @@ class LLMRouter:
     NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
     NVIDIA_MODEL_FLASH = "deepseek-ai/deepseek-v4-flash"
     NVIDIA_MODEL_PRO = "deepseek-ai/deepseek-v4-pro"
+    NVIDIA_MODEL_FAST = "meta/llama-3.1-8b-instruct"
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 
     def __init__(self):
@@ -225,7 +226,11 @@ class LLMRouter:
                 if not key:
                     continue
                 with _nvidia_serialize_lock:  # disable concurrency per user's guidance
-                    for mdl, timeout in [(self.NVIDIA_MODEL_FLASH, 60), (self.NVIDIA_MODEL_PRO, 90)]:
+                    for mdl, timeout in [
+                        (self.NVIDIA_MODEL_FAST, 120),
+                        (self.NVIDIA_MODEL_FLASH, 180),
+                        (self.NVIDIA_MODEL_PRO, 240),
+                    ]:
                         try:
                             result = self._call_nvidia(prompt, system, max_tokens,
                                                         temperature, mdl, key, timeout,
@@ -466,7 +471,9 @@ class LLMRouter:
         for attempt in range(max_retries):
             t0 = time.time()
             try:
-                http_client = httpx.Client(timeout=httpx.Timeout(timeout_secs, connect=15))
+                http_client = httpx.Client(
+                    timeout=httpx.Timeout(timeout_secs, connect=30, read=timeout_secs, pool=10),
+                )
                 client = OpenAI(
                     base_url=self.NVIDIA_BASE,
                     api_key=api_key,
