@@ -392,6 +392,22 @@ These will be executed and the results appended to your output.
         return result
 
     @staticmethod
+    def _log_chat(self, prompt: str, output: str = None,
+                   role: str = "worker", success: bool = False,
+                   error: str = None, tokens: int = 0):
+        """Log LLM interaction to chat_history so the dashboard shows it."""
+        try:
+            from master.system_store import SystemStore
+            store = SystemStore()
+            store.log_chat_interaction(
+                self.agent.name, prompt, output,
+                execution_mode="orchestrator",
+                success=success, error_message=error,
+                tokens_used=tokens, role=role,
+            )
+        except Exception:
+            pass
+
     def _async_navigate(url: str) -> Optional[dict]:
         """Navigate to a URL using async Playwright (thread-safe)."""
         import asyncio
@@ -963,12 +979,15 @@ Return via the submit_revision_instructions function.
                                       latency_ms=result.latency_ms,
                                       provider=result.provider,
                                       model=result.model)
+                self._log_chat(prompt, result.text, role=role, success=True,
+                                tokens=result.input_tokens + result.output_tokens)
                 return result
 
             self._model_unavailable = True
             self._model_failed_at = time.time()
             self.event_log.write(phase="llm_call", event_id=event_id or "",
                                   ok=False, role=role, error="all providers failed")
+            self._log_chat(prompt, role=role, success=False, error="all providers failed")
             return None
         finally:
             _llm_semaphore.release()
@@ -998,12 +1017,15 @@ Return via the submit_revision_instructions function.
                 self._model_failed_at = 0
                 self.event_log.write(phase="llm_call_structured", event_id=event_id or "",
                                       ok=True, role=role)
+                output_str = json.dumps(result)[:2000]
+                self._log_chat(prompt, output_str, role=role, success=True)
                 return result
 
             self._model_unavailable = True
             self._model_failed_at = time.time()
             self.event_log.write(phase="llm_call_structured", event_id=event_id or "",
                                   ok=False, role=role, error="all providers failed")
+            self._log_chat(prompt, role=role, success=False, error="all providers failed")
             return None
         finally:
             _llm_semaphore.release()
