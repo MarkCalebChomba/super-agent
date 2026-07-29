@@ -509,9 +509,10 @@ Return your evaluation via the submit_evaluation function.
             return {"output": None, "success": False, "idle": True, "cycle_id": cycle_id}
 
         task_id = task["id"]
-        task["state"] = "PLANNING"  # already planned if from queue
+        task["state"] = "PLANNING"
         self.revision_count = 0
         revision_hint = ""
+        result = None  # ensure defined for error path
 
         # ── Revision loop ─────────────────────────────────────────────
         while self.revision_count <= self.max_revisions:
@@ -664,9 +665,11 @@ Return your evaluation via the submit_evaluation function.
                               revision_count=self.revision_count)
 
         duration_ms = (time.time() - started_at) * 1000
+        output = result.get("output") if result else None
+        critique = locals().get("critique")
 
         return {
-            "output": result.get("output") if 'result' in dir() else None,
+            "output": output,
             "success": False,
             "verdict": final_state.lower(),
             "critique": critique if 'critique' in dir() else None,
