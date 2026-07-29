@@ -391,6 +391,57 @@ These will be executed and the results appended to your output.
                               has_human_task=human_task is not None)
         return result
 
+    @staticmethod
+    def _async_navigate(url: str) -> Optional[dict]:
+        """Navigate to a URL using async Playwright (thread-safe)."""
+        import asyncio
+        from playwright.async_api import async_playwright
+        try:
+            async def go():
+                async with async_playwright() as pw:
+                    browser = await pw.chromium.launch(
+                        headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'],
+                    )
+                    page = await browser.new_page()
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    title = await page.title()
+                    content = await page.inner_text("body")
+                    content = content[:3000]
+                    screenshot = ""
+                    try:
+                        spath = str(Path(f"/tmp/screenshot_{int(time.time())}.png"))
+                        await page.screenshot(path=spath)
+                        screenshot = spath
+                    except Exception:
+                        pass
+                    await browser.close()
+                    return {"title": title, "content_snippet": content[:500], "screenshot": screenshot}
+            return asyncio.run(go())
+        except Exception as e:
+            logger.warning(f"async_navigate({url}) failed: {e}")
+            return None
+
+    @staticmethod
+    def _async_scrape(url: str) -> Optional[str]:
+        """Scrape text content from a URL using async Playwright (thread-safe)."""
+        import asyncio
+        from playwright.async_api import async_playwright
+        try:
+            async def go():
+                async with async_playwright() as pw:
+                    browser = await pw.chromium.launch(
+                        headless=True, args=['--no-sandbox', '--disable-setuid-sandbox'],
+                    )
+                    page = await browser.new_page()
+                    await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                    content = await page.inner_text("body")
+                    await browser.close()
+                    return content[:5000]
+            return asyncio.run(go())
+        except Exception as e:
+            logger.warning(f"async_scrape({url}) failed: {e}")
+            return None
+
     def _execute_browser_actions(self, output: str, task: dict) -> str:
         """Execute real browser actions using AI-powered browser automation.
 
@@ -461,8 +512,7 @@ These will be executed and the results appended to your output.
                 if action == "navigate":
                     url = arg1.strip() if arg1 else ""
                     if url:
-                        from tools.stealth_browser import navigate_to_url
-                        nav = navigate_to_url(url)
+                        nav = self._async_navigate(url)
                         if nav:
                             snippet = nav.get("content_snippet", "")[:500]
                             screenshot = nav.get("screenshot", "")
@@ -475,8 +525,7 @@ These will be executed and the results appended to your output.
                 elif action == "scrape":
                     url = arg1.strip() if arg1 else ""
                     if url:
-                        from tools.stealth_browser import scrape_url
-                        content = scrape_url(url)
+                        content = self._async_scrape(url)
                         if content:
                             browser_results.append(f"[SCRAPE] {url}: {len(content)} chars")
                             browser_results.append(content[:2000])
@@ -487,8 +536,12 @@ These will be executed and the results appended to your output.
                     email = arg1.strip() if arg1 else ""
                     password = arg2.strip() if arg2 else ""
                     if email and password:
-                        from tools.stealth_browser import login_google
-                        login_result = login_google(email, password)
+                        try:
+                            from tools.stealth_browser import login_google
+                            login_result = login_google(email, password)
+                        except Exception as login_e:
+                            browser_results.append(f"[GOOGLE LOGIN] FAILED: {login_e}")
+                            continue
                         if login_result:
                             ok = login_result.get("success", False)
                             browser_results.append(f"[GOOGLE LOGIN] {'OK' if ok else 'FAIL'}")
@@ -507,8 +560,7 @@ These will be executed and the results appended to your output.
 
                 elif action == "screenshot":
                     url = arg1.strip() if arg1 else "about:blank"
-                    from tools.stealth_browser import navigate_to_url
-                    nav = navigate_to_url(url, wait_seconds=2)
+                    nav = self._async_navigate(url)
                     if nav and nav.get("screenshot"):
                         browser_results.append(f"[SCREENSHOT] {nav['screenshot']}")
 
