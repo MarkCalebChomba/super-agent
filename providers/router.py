@@ -505,8 +505,8 @@ class LLMRouter:
                 if attempt < max_retries - 1:
                     delay = (2.0 ** attempt) + random.uniform(0, 1.0)
                     tag = "429" if is_429 else "error"
-                    logger.info(f"NVIDIA {tag} (attempt {attempt+1}/{max_retries}), "
-                                 f"backoff {delay:.1f}s")
+                    logger.info(f"NVIDIA {tag} (attempt {attempt+1}/{max_retries}): "
+                                 f"{str(e)[:100]}, backoff {delay:.1f}s")
                     time.sleep(delay)
                     continue
                 raise  # last attempt — propagate
