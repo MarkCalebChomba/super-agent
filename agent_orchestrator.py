@@ -226,7 +226,8 @@ Return the tasks via the submit_tasks function.
 
         if result and result.get("tasks"):
             tasks = result["tasks"]
-            for t in tasks:
+            for i, t in enumerate(tasks):
+                t.setdefault("id", f"task_{i+1}")
                 t.setdefault("status", "PENDING")
                 t.setdefault("attempts", 0)
                 t.setdefault("revisions", 0)
