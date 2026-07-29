@@ -19,13 +19,29 @@
 - **Profile name**: `hf`
 
 ### NVIDIA API
-- **Key 1**: `nvapi-***redacted***` (set as NVIDIA_API_KEY)
-- **Key 2**: `nvapi-***redacted***` (set as NVIDIA_API_KEY_2, may be truncated)
+- **Key 1**: `nvapi-***redacted***` (set as NVIDIA_API_KEY) — regenerated 2026-07-29
+- **Key 2**: `nvapi-***redacted***` (set as NVIDIA_API_KEY_2) — regenerated 2026-07-29
 - **Endpoint**: `https://integrate.api.nvidia.com/v1`
-- **DeepSeek V4 Flash**: `deepseek-ai/deepseek-v4-flash` — works but returns 503 (ResourceExhausted) when overloaded by other instances
-- **DeepSeek V4 Pro**: `deepseek-ai/deepseek-v4-pro` — works but ~120s cold start
+- **Models** (in order tried):
+  1. `deepseek-ai/deepseek-v4-flash` (300s timeout) — fast but returns 503 when overloaded
+  2. `nvidia/nemotron-3-super-120b-a12b` (120s timeout) — new, less contention
+  3. `nvidia/nemotron-3-ultra-550b-a55b` (120s timeout) — new, powerful
+  4. `deepseek-ai/deepseek-v4-pro` (300s timeout) — slower fallback
 - **Status**: PRIMARY WORKING PROVIDER — retries on 503 with exponential backoff
-- **Circuit breaker**: Set to 100 failures (effectively always tries)
+- **Circuit breaker**: threshold=100, cooldown=300s
+- **Retries**: 5 tries, base backoff 0.5s, only on 429/5xx
+- **Serialized**: single `_nvidia_serialize_lock`
+
+### Gemini API
+- **Key 1**: `AQ.Ab8***redacted***` (set as GEMINI_API_KEY) — projects/525669420787
+- **Key 2**: `AQ.Ab8***redacted***` (set as GEMINI_API_KEY_2) — projects/442125752616
+- **Endpoint**: `https://generativelanguage.googleapis.com/v1beta`
+- **Models** (in order tried):
+  - `gemini-2.5-flash` (10 RPM, up to 1,500 RPD)
+  - `gemini-2.5-flash-lite` (15 RPM, up to 1,000 RPD)
+  - `gemini-2.5-pro` (5 RPM, up to 100 RPD)
+- **Status**: Free tier added as provider #3 (between OpenRouter and NVIDIA)
+- **Circuit breaker**: threshold=10, cooldown=60s
 
 ### OpenRouter
 - **Key 1**: Set in Railway env (`OPENROUTER_API_KEY`)
@@ -64,15 +80,37 @@ tools/stealth_browser.py — Playwright-based browser automation (navigate, logi
 5. **SHIPPING**: `_ship_output()` → Writes artifact to `artifacts/<agent>/<task_id>/<timestamp>.md`
 6. **DONE/FAILED/DEAD_LETTER**: Terminal states
 
-### LLM Provider Path
+### LLM Provider Path — Tier-Driven
 ```
 complete() / complete_structured():
-  1. HF Inference (router.huggingface.co) → 402 (no credits)
-  2. HF serverless fallback (api-inference.huggingface.co) → DNS failure
-  3. OpenRouter (4 models) → 429 (free) / 402 (paid, no credits)
-  4. NVIDIA DeepSeek V4 Flash → 503 overloaded (retries 5x with backoff)
-  5. NVIDIA DeepSeek V4 Pro → cold start 120s
+  Order depends on tier:
+
+  cheap (Gemini-first):
+    1. Gemini 2.5 Flash → free, fast, 10 RPM
+    2. Gemini 2.5 Flash-Lite → free, 15 RPM
+    3. Gemini 2.5 Pro → free, 5 RPM
+    4. OpenRouter → 429/402
+    5. HF Inference → 402 (no credits)
+    6. NVIDIA → last resort
+
+  powerful (NVIDIA-first):
+    1. NVIDIA DeepSeek V4 Flash → 503 overloaded (retries 5x)
+    2. NVIDIA Nemotron-3 Super 120B → new, less contention
+    3. NVIDIA Nemotron-3 Ultra 550B → new, powerful
+    4. NVIDIA DeepSeek V4 Pro → cold start 120s
+    5. OpenRouter → 429/402
+    6. HF Inference → 402 (no credits)
+    7. Gemini → last resort
 ```
+
+### Tier Assignments
+| Call Site | Tier | Why |
+|-----------|------|-----|
+| `_plan_tasks()` | powerful | Task planning = decision-making |
+| `_execute_task()` | powerful | Content creation = decision-making |
+| `_evaluate_output()` | powerful | Scoring/critique = decision-making |
+| `_build_revision_prompt()` | powerful | Revision instructions = decision-making |
+| `AgentBrowser` (browser-use) | cheap | Data extraction, form-filling, summaries |
 
 ### Current Working State
 - DeepSeek V4 Flash works on NVIDIA but gets 503 (ResourceExhausted) from other instances

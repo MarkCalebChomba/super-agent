@@ -222,7 +222,7 @@ Analyze their approach and express insights in your own words.
 Return the tasks via the submit_tasks function.
 """
         result = self._llm_call_structured(prompt, PLAN_SCHEMA, role="supervisor",
-                                            event_id=event_id)
+                                            event_id=event_id, tier="powerful")
 
         if result and result.get("tasks"):
             tasks = result["tasks"]
@@ -338,7 +338,7 @@ These will be executed and the results appended to your output.
 
         prompt = "\n\n".join(parts)
         llm_result = self._llm_call(prompt, role="worker", max_tokens=65536,
-                                     event_id=event_id)
+                                     event_id=event_id, tier="powerful")
 
         if not llm_result:
             self.event_log.write(phase="executing_failed", event_id=event_id,
@@ -621,7 +621,7 @@ These will be executed and the results appended to your output.
 Return your evaluation via the submit_evaluation function.
 """
         result = self._llm_call_structured(prompt, CRITIC_SCHEMA, role="critic",
-                                            event_id=event_id)
+                                            event_id=event_id, tier="powerful")
 
         if not result:
             self.event_log.write(phase="evaluating_failed", event_id=event_id,
@@ -834,6 +834,7 @@ Return your evaluation via the submit_evaluation function.
                     self._build_revision_prompt(task, critique),
                     REVISION_SCHEMA,
                     role="supervisor",
+                    tier="powerful",
                 )
                 if revision_data and revision_data.get("revision_instructions"):
                     revision_hint = "\n".join(f"- {h}" for h in revision_data["revision_instructions"])
@@ -935,6 +936,7 @@ Return via the submit_revision_instructions function.
 
     def _llm_call(self, prompt: str, role: str = "worker",
                   max_tokens: int = 4096, event_id: str = "",
+                  tier: str = "balanced",
                   ) -> Optional[object]:
         """Raw LLM call via router with retry + semaphore. Returns LLMResult or None."""
         acquired = _llm_semaphore.acquire(timeout=60)
@@ -949,6 +951,7 @@ Return via the submit_revision_instructions function.
                 prompt=prompt,
                 system="You are an autonomous AI agent. Execute your purpose.",
                 max_tokens=max_tokens,
+                tier=tier,
             )
             if result:
                 self._model_unavailable = False
@@ -972,7 +975,8 @@ Return via the submit_revision_instructions function.
 
     def _llm_call_structured(self, prompt: str, schema: dict,
                               role: str = "supervisor",
-                              event_id: str = "") -> Optional[dict]:
+                              event_id: str = "",
+                              tier: str = "powerful") -> Optional[dict]:
         """Call LLM with schema-forced JSON output via tool calling."""
         acquired = _llm_semaphore.acquire(timeout=60)
         if not acquired:
@@ -987,6 +991,7 @@ Return via the submit_revision_instructions function.
                 schema=schema,
                 system="You are an autonomous AI agent. Return the required schema precisely.",
                 max_tokens=65536,
+                tier=tier,
             )
             if result:
                 self._model_unavailable = False

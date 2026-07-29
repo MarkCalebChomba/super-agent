@@ -24,15 +24,28 @@ MODEL_TIERS = {
     "cheap": {
         "hf": "deepseek-ai/DeepSeek-V4-Flash",
         "openrouter": "openrouter/free",
+        "gemini": "gemini-2.5-flash",
     },
     "balanced": {
         "hf": "deepseek-ai/DeepSeek-V4-Flash",
         "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "gemini": "gemini-2.5-flash",
     },
     "powerful": {
         "hf": "deepseek-ai/DeepSeek-V3",
         "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",
+        "gemini": "gemini-2.5-pro",
     },
+}
+
+# Tier → provider attempt order.
+# cheap  = Gemini first (fast/cheap), NVIDIA last resort.
+# powerful = NVIDIA first (smart), Gemini last.
+# balanced = OpenRouter first, NVIDIA mid, Gemini last.
+PROVIDER_ORDER = {
+    "cheap":     ["gemini", "openrouter", "hf", "nvidia"],
+    "balanced":  ["openrouter", "gemini", "hf", "nvidia"],
+    "powerful":  ["nvidia", "openrouter", "hf", "gemini"],
 }
 
 # Approximate $/token costs for DeepSeek V4 Flash via HF router
@@ -98,6 +111,7 @@ class CircuitBreaker:
 _hf_breaker = CircuitBreaker("hf-inference", fail_threshold=5, cooldown_s=60)
 _or_breaker = CircuitBreaker("openrouter", fail_threshold=3, cooldown_s=120)
 _nv_breaker = CircuitBreaker("nvidia", fail_threshold=100, cooldown_s=300)  # high threshold — keep trying
+_gemini_breaker = CircuitBreaker("gemini", fail_threshold=10, cooldown_s=60)
 
 # Token-bucket rate limiters per NVIDIA key (38 RPM — just under 40 RPM ceiling)
 _nvidia_serialize_lock = threading.Lock()  # serialize all NVIDIA calls
@@ -122,7 +136,10 @@ class LLMRouter:
     NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
     NVIDIA_MODEL_FLASH = "deepseek-ai/deepseek-v4-flash"
     NVIDIA_MODEL_PRO = "deepseek-ai/deepseek-v4-pro"
+    NVIDIA_MODEL_NEMO_SUPER = "nvidia/nemotron-3-super-120b-a12b"
+    NVIDIA_MODEL_NEMO_ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+    GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
     def __init__(self):
         self.hf_token = os.getenv("HF_TOKEN", "")
@@ -130,6 +147,8 @@ class LLMRouter:
         self.nvidia_key_2 = os.getenv("NVIDIA_API_KEY_2", "")
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
         self.openrouter_key_2 = os.getenv("OPENROUTER_API_KEY_2", "")
+        self.gemini_key = os.getenv("GEMINI_API_KEY", "")
+        self.gemini_key_2 = os.getenv("GEMINI_API_KEY_2", "")
 
     def complete(self, prompt: str,
                  system: str = "You are a helpful AI assistant.",
@@ -140,78 +159,110 @@ class LLMRouter:
                  tool_choice: Optional[str] = None,
                  tier: ModelTier = "balanced",
                  ) -> Optional[LLMResult]:
-        """Primary provider path: HF Inference → OpenRouter → NVIDIA.
+        """Provider-ordered completion based on tier.
 
-        Every call writes to the circuit breaker. Uses exponential backoff.
-        Returns LLMResult or None if all providers exhausted.
+        cheap     → Gemini first (fast/cheap summaries), then OpenRouter, HF, NVIDIA last.
+        powerful  → NVIDIA first (smart decisions), then OpenRouter, HF, Gemini last.
+        balanced  → OpenRouter first, Gemini, HF, NVIDIA.
         """
         models = MODEL_TIERS.get(tier, MODEL_TIERS["balanced"])
         hf_model = model or models["hf"]
-
+        order = PROVIDER_ORDER.get(tier, PROVIDER_ORDER["balanced"])
         last_error = ""
 
-        # 1. HF Inference (primary — only consistently working provider)
-        if not _hf_breaker.is_open and self.hf_token:
-            for attempt in range(2):
-                try:
-                    result = self._call_hf(prompt, system, max_tokens,
-                                            temperature, hf_model,
-                                            tools=tools, tool_choice=tool_choice)
-                    if result:
-                        _hf_breaker.record(True)
-                        return result
-                except Exception as e:
-                    _hf_breaker.record(False)
-                    last_error = str(e)[:100]
-                    if attempt == 0:
-                        delay = 1.0 + random.uniform(0, 0.5)
-                        time.sleep(delay)
-        else:
-            last_error = "circuit open or no token"
-
-        # 2. OpenRouter fallback
-        if not _or_breaker.is_open:
-            or_models = [
-                models.get("openrouter", "openrouter/free"),
-                "openrouter/free",
-                "deepseek/deepseek-r1",
-                "deepseek/deepseek-chat",
-            ]
-            for or_model in or_models:
-                try:
-                    result = self._call_openrouter(prompt, system, max_tokens,
-                                                    temperature, or_model)
-                    if result:
-                        _or_breaker.record(True)
-                        return result
-                except Exception as e:
-                    _or_breaker.record(False)
-                    last_error = str(e)[:100]
-
-        # 3. NVIDIA (serialized, retries, no circuit breaker issues)
-        if not _nv_breaker.is_open:
-            for key_attr, key_idx in [
-                ("nvidia_key", 1),
-                ("nvidia_key_2", 2),
-            ]:
-                key = getattr(self, key_attr, None)
-                if not key:
+        for provider in order:
+            if provider == "hf":
+                if _hf_breaker.is_open or not self.hf_token:
+                    last_error = "hf: circuit open or no token"
                     continue
-                with _nvidia_serialize_lock:  # ONE call at a time
-                    for mdl, timeout in [
-                        (self.NVIDIA_MODEL_FLASH, 300),
-                        (self.NVIDIA_MODEL_PRO, 300),
-                    ]:
+                for attempt in range(2):
+                    try:
+                        result = self._call_hf(prompt, system, max_tokens,
+                                                temperature, hf_model,
+                                                tools=tools, tool_choice=tool_choice)
+                        if result:
+                            _hf_breaker.record(True)
+                            return result
+                    except Exception as e:
+                        _hf_breaker.record(False)
+                        last_error = str(e)[:100]
+                        if attempt == 0:
+                            time.sleep(1.0 + random.uniform(0, 0.5))
+
+            elif provider == "openrouter":
+                if _or_breaker.is_open:
+                    last_error = "openrouter: circuit open"
+                    continue
+                or_models = [
+                    models.get("openrouter", "openrouter/free"),
+                    "openrouter/free",
+                    "deepseek/deepseek-r1",
+                    "deepseek/deepseek-chat",
+                ]
+                for or_model in or_models:
+                    try:
+                        result = self._call_openrouter(prompt, system, max_tokens,
+                                                        temperature, or_model)
+                        if result:
+                            _or_breaker.record(True)
+                            return result
+                    except Exception as e:
+                        _or_breaker.record(False)
+                        last_error = str(e)[:100]
+
+            elif provider == "gemini":
+                if _gemini_breaker.is_open:
+                    last_error = "gemini: circuit open"
+                    continue
+                if not (self.gemini_key or self.gemini_key_2):
+                    last_error = "gemini: no keys"
+                    continue
+                gemini_keys = [k for k in [self.gemini_key, self.gemini_key_2] if k]
+                gemini_models = [
+                    models.get("gemini", "gemini-2.5-flash"),
+                    "gemini-2.5-flash-lite",
+                    "gemini-2.5-pro",
+                ]
+                for gkey in gemini_keys:
+                    for gmodel in gemini_models:
                         try:
-                            result = self._call_nvidia(prompt, system, max_tokens,
-                                                        temperature, mdl, key, timeout)
+                            result = self._call_gemini(prompt, system, max_tokens,
+                                                        temperature, gmodel, gkey)
                             if result:
-                                _nv_breaker.record(True)
+                                _gemini_breaker.record(True)
                                 return result
                         except Exception as e:
-                            _nv_breaker.record(False)
-                            logger.warning(f"NVIDIA {mdl} (key {key_idx}): {str(e)[:120]}")
+                            _gemini_breaker.record(False)
                             last_error = str(e)[:100]
+
+            elif provider == "nvidia":
+                if _nv_breaker.is_open:
+                    last_error = "nvidia: circuit open"
+                    continue
+                for key_attr, key_idx in [
+                    ("nvidia_key", 1),
+                    ("nvidia_key_2", 2),
+                ]:
+                    key = getattr(self, key_attr, None)
+                    if not key:
+                        continue
+                    with _nvidia_serialize_lock:
+                        for mdl, timeout in [
+                            (self.NVIDIA_MODEL_FLASH, 300),
+                            (self.NVIDIA_MODEL_NEMO_SUPER, 120),
+                            (self.NVIDIA_MODEL_NEMO_ULTRA, 120),
+                            (self.NVIDIA_MODEL_PRO, 300),
+                        ]:
+                            try:
+                                result = self._call_nvidia(prompt, system, max_tokens,
+                                                            temperature, mdl, key, timeout)
+                                if result:
+                                    _nv_breaker.record(True)
+                                    return result
+                            except Exception as e:
+                                _nv_breaker.record(False)
+                                logger.warning(f"NVIDIA {mdl} (key {key_idx}): {str(e)[:120]}")
+                                last_error = str(e)[:100]
 
         logger.error(f"All providers exhausted. Last error: {last_error}")
         return None
@@ -221,7 +272,7 @@ class LLMRouter:
                             system: str = "You are a helpful AI assistant.",
                             max_tokens: int = 4096,
                             temperature: float = 0.7,
-                            tier: ModelTier = "balanced",
+                            tier: ModelTier = "powerful",
                             ) -> Optional[dict]:
         """Call LLM with a tool/function schema to force structured JSON output.
 
@@ -490,3 +541,52 @@ class LLMRouter:
                 raise
 
         raise RuntimeError(f"NVIDIA exhausted after {max_retries} retries: {last_exc}")
+
+    # ── Gemini ──────────────────────────────────────────────────────
+
+    def _call_gemini(self, prompt: str, system: str,
+                      max_tokens: int, temperature: float,
+                      model: str, api_key: str) -> Optional[LLMResult]:
+        """Call Google Gemini API (free tier)."""
+        t0 = time.time()
+        url = f"{self.GEMINI_BASE}/models/{model}:generateContent?key={api_key}"
+        body = {
+            "contents": [
+                {"role": "user", "parts": [{"text": prompt}]}
+            ],
+            "systemInstruction": {"parts": [{"text": system}]},
+            "generationConfig": {
+                "maxOutputTokens": min(max_tokens, 8192),
+                "temperature": temperature,
+                "topP": 0.95,
+            },
+        }
+        try:
+            resp = requests.post(url, json=body, timeout=60)
+            latency = (time.time() - t0) * 1000
+            if resp.status_code == 200:
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if candidates:
+                    content_parts = candidates[0].get("content", {}).get("parts", [])
+                    text = " ".join(p.get("text", "") for p in content_parts)
+                    usage = data.get("usageMetadata", {})
+                    in_tokens = usage.get("promptTokenCount", _estimate_tokens(prompt + system))
+                    out_tokens = usage.get("candidatesTokenCount", _estimate_tokens(text))
+                    logger.info(f"Gemini SUCCESS ({model}): {len(text)} chars, "
+                                 f"{in_tokens}+{out_tokens} tokens, {latency:.0f}ms")
+                    return LLMResult(
+                        text=text,
+                        input_tokens=in_tokens,
+                        output_tokens=out_tokens,
+                        model=model,
+                        provider="gemini",
+                        latency_ms=latency,
+                    )
+            logger.info(f"Gemini ({model}) status={resp.status_code}: {resp.text[:150]}")
+            if resp.status_code == 429:
+                time.sleep(2)
+            return None
+        except Exception as e:
+            logger.info(f"Gemini ({model}) failed: {str(e)[:100]}")
+            return None

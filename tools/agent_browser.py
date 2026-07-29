@@ -4,6 +4,7 @@ All Playwright operations run via asyncio to avoid greenlet thread-safety issues
 """
 import asyncio
 import json
+import os
 import time
 import random
 import re
@@ -24,13 +25,9 @@ class AgentBrowser:
     All Playwright calls are bridged through asyncio for thread-safety.
     """
 
-    def __init__(self, llm_config: Optional[dict] = None):
-        self.llm_config = llm_config or {
-            "model": "deepseek-ai/deepseek-v4-flash",
-            "provider": "nvidia",
-            "api_key": "",  # set via env
-            "base_url": "https://integrate.api.nvidia.com/v1",
-        }
+    def __init__(self, llm_config: Optional[dict] = None, tier: str = "cheap"):
+        self.tier = tier
+        self.llm_config = llm_config or self._default_llm_config(tier)
         self._browser_use_available = self._check_browser_use()
 
     def _check_browser_use(self) -> bool:
@@ -72,10 +69,34 @@ class AgentBrowser:
         task = "\n".join(task_parts)
         return self.run_task(task, max_steps=30)
 
-    def extract_data_from_page(self, url: str, description: str) -> dict:
-        """Navigate to a URL and extract data based on a description."""
+    def extract_data_from_page(self, url: str, description: str, tier: str = "cheap") -> dict:
+        """Navigate to a URL and extract data based on a description (uses Gemini by default)."""
         task = f"Go to {url}\n{description}\nExtract the requested information and return it."
         return self.run_task(task, max_steps=10)
+
+    @staticmethod
+    def _default_llm_config(tier: str = "cheap") -> dict:
+        """Pick the right model for browser-use based on tier.
+        cheap = Gemini 2.5 Flash (fast, free, good for extraction)
+        powerful = NVIDIA DeepSeek V4 Flash (smart, for complex navigation)
+        """
+        if tier == "cheap":
+            return {
+                "model": "gemini-2.5-flash",
+                "provider": "gemini",
+                "api_key": os.environ.get("GEMINI_API_KEY", ""),
+                "base_url": "https://generativelanguage.googleapis.com/v1beta",
+                "temperature": 0.1,
+                "max_tokens": 4096,
+            }
+        return {
+            "model": "deepseek-ai/deepseek-v4-flash",
+            "provider": "nvidia",
+            "api_key": os.environ.get("NVIDIA_API_KEY", ""),
+            "base_url": "https://integrate.api.nvidia.com/v1",
+            "temperature": 0.1,
+            "max_tokens": 4096,
+        }
 
     def cleanup(self):
         pass
@@ -193,12 +214,8 @@ class AgentBrowser:
     # ── LLM config for browser-use ──────────────────────────────────
 
     def _make_llm_config(self):
-        """Create LLM configuration dict for browser-use Agent."""
-        return {
-            "model": self.llm_config.get("model", "deepseek-ai/deepseek-v4-flash"),
-            "provider": self.llm_config.get("provider", "nvidia"),
-            "api_key": self.llm_config.get("api_key", ""),
-            "base_url": self.llm_config.get("base_url", "https://integrate.api.nvidia.com/v1"),
-            "temperature": self.llm_config.get("temperature", 0.1),
-            "max_tokens": self.llm_config.get("max_tokens", 4096),
-        }
+        """Create LLM configuration dict for browser-use Agent.
+        Uses Gemini (cheap/fast) by default for browser extraction/summary.
+        Only uses NVIDIA (expensive/smart) for complex decision-making tasks.
+        """
+        return self.llm_config
