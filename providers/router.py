@@ -1,10 +1,11 @@
-"""LLM Router — one hardened provider path with circuit breaker + real cost tracking.
+"""LLM Router — Free-first provider path with 20 RPM cap.
 
-Architecture (per user's redesign):
-- Circuit breaker per provider (opens after N failures, cooldown, then half-open)
+Architecture:
+- OpenRouter free models as primary (20 RPM cap)
+- Google Gemini as fallback (avoid — heavily censored)
+- MiMo v2.5 as paid last resort (only when very necessary)
+- Circuit breaker per provider, exponential backoff
 - complete() returns LLMResult with text + token_usage + cost
-- Tool-calling support for schema-forced JSON output
-- EventLog writes for every call
 """
 import os
 import re
@@ -13,44 +14,70 @@ import time
 import random
 import threading
 from typing import Optional, Literal, NamedTuple
-from dataclasses import dataclass
 from loguru import logger
 import requests
 
 
 ModelTier = Literal["cheap", "balanced", "powerful"]
 
+# ── Free models on OpenRouter (March-June 2026) ──────────────────────
+# Intelligent models (use for decision-making, planning, evaluation)
+FREE_MODELS_POWERFUL = [
+    "nvidia/nemotron-3-ultra:free",          # powerful reasoning
+    "google/gemma-4-31b:free",               # intelligent, large context
+    "nvidia/nemotron-3-super:free",          # strong general
+    "google/gemma-4-26b-a4b:free",           # intelligent, efficient
+]
+
+# Fast models (use for extraction, summaries, cheap work)
+FREE_MODELS_CHEAP = [
+    "inclusionai/ling-3.0-flash:free",       # fast language
+    "nvidia/nemotron-3-nano-omni:free",      # fast multimodal
+    "poolside/laguna-xs-2.1:free",           # fast code
+    "poolside/laguna-s-2.1:free",            # code
+]
+
+# Code-specific models
+FREE_MODELS_CODE = [
+    "poolside/laguna-s-2.1:free",
+    "cohere/north-mini-code:free",
+    "poolside/laguna-xs-2.1:free",
+]
+
+# MiMo v2.5 — PAID, only when very necessary
+MIMO_MODEL = "mimo/mimo-v2.5"
+
+# Tier → model mapping
 MODEL_TIERS = {
     "cheap": {
-        "hf": "deepseek-ai/DeepSeek-V4-Flash",
-        "openrouter": "openrouter/free",
-        "gemini": "gemini-2.5-flash",
+        "openrouter": FREE_MODELS_CHEAP,
+        "mimo": MIMO_MODEL,
     },
     "balanced": {
-        "hf": "deepseek-ai/DeepSeek-V4-Flash",
-        "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "gemini": "gemini-2.5-flash",
+        "openrouter": FREE_MODELS_POWERFUL + FREE_MODELS_CHEAP,
+        "mimo": MIMO_MODEL,
     },
     "powerful": {
-        "hf": "deepseek-ai/DeepSeek-V3",
-        "openrouter": "nvidia/nemotron-3-ultra-550b-a55b:free",
-        "gemini": "gemini-2.5-pro",
+        "openrouter": FREE_MODELS_POWERFUL,
+        "mimo": MIMO_MODEL,
     },
 }
 
-# Tier → provider attempt order.
-# cheap  = Gemini first (fast/cheap), NVIDIA last resort.
-# powerful = NVIDIA first (smart), Gemini last.
-# balanced = OpenRouter first, NVIDIA mid, Gemini last.
+# Provider attempt order: OpenRouter first → Google fallback → MiMo paid last
 PROVIDER_ORDER = {
-    "cheap":     ["gemini", "openrouter", "hf", "nvidia"],
-    "balanced":  ["openrouter", "gemini", "hf", "nvidia"],
-    "powerful":  ["nvidia", "openrouter", "hf", "gemini"],
+    "cheap":     ["openrouter", "gemini", "mimo"],
+    "balanced":  ["openrouter", "gemini", "mimo"],
+    "powerful":  ["openrouter", "gemini", "mimo"],
 }
 
-# Approximate $/token costs for DeepSeek V4 Flash via HF router
-COST_PER_INPUT_TOKEN = 0.00000014   # $0.14/M tokens
-COST_PER_OUTPUT_TOKEN = 0.00000028  # $0.28/M tokens
+# Approximate costs (MiMo v2.5 only — free models cost $0)
+COST_PER_INPUT_TOKEN = 0.0000005   # $0.50/M tokens (MiMo estimate)
+COST_PER_OUTPUT_TOKEN = 0.0000015  # $1.50/M tokens (MiMo estimate)
+
+# Rate limiting: 20 RPM cap for OpenRouter
+_OPENROUTER_RPM_CAP = 20
+_OPENROUTER_CALL_TIMES: list[float] = []
+_OPENROUTER_RATE_LOCK = threading.Lock()
 
 
 class LLMResult(NamedTuple):
@@ -63,6 +90,8 @@ class LLMResult(NamedTuple):
 
     @property
     def cost(self) -> float:
+        if self.provider == "openrouter":
+            return 0.0  # free models
         return (self.input_tokens * COST_PER_INPUT_TOKEN +
                 self.output_tokens * COST_PER_OUTPUT_TOKEN)
 
@@ -84,7 +113,6 @@ class CircuitBreaker:
             if self._opened_at is None:
                 return False
             if time.time() - self._opened_at > self.cooldown_s:
-                # half-open — allow one probe
                 return False
             return True
 
@@ -105,50 +133,48 @@ class CircuitBreaker:
             return f"CircuitBreaker({self.name}, status={status}, failures={self._failures})"
 
 
-
-
 # ── Global circuit breakers ──────────────────────────────────────────
-_hf_breaker = CircuitBreaker("hf-inference", fail_threshold=5, cooldown_s=60)
-_or_breaker = CircuitBreaker("openrouter", fail_threshold=3, cooldown_s=120)
-_nv_breaker = CircuitBreaker("nvidia", fail_threshold=100, cooldown_s=300)  # high threshold — keep trying
-_gemini_breaker = CircuitBreaker("gemini", fail_threshold=10, cooldown_s=60)
-
-# Token-bucket rate limiters per NVIDIA key (38 RPM — just under 40 RPM ceiling)
-_nvidia_serialize_lock = threading.Lock()  # serialize all NVIDIA calls
-
-
-class ProviderUnavailable(Exception):
-    """All providers exhausted or circuit-broken."""
+_or_breaker = CircuitBreaker("openrouter", fail_threshold=5, cooldown_s=60)
+_gemini_breaker = CircuitBreaker("gemini", fail_threshold=3, cooldown_s=120)
+_mimo_breaker = CircuitBreaker("mimo", fail_threshold=3, cooldown_s=120)
 
 
 def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
+def _openrouter_rate_limit():
+    """Enforce 20 RPM cap on OpenRouter."""
+    with _OPENROUTER_RATE_LOCK:
+        now = time.time()
+        # Remove calls older than 60s
+        while _OPENROUTER_CALL_TIMES and _OPENROUTER_CALL_TIMES[0] < now - 60:
+            _OPENROUTER_CALL_TIMES.pop(0)
+        if len(_OPENROUTER_CALL_TIMES) >= _OPENROUTER_RPM_CAP:
+            wait = 60 - (now - _OPENROUTER_CALL_TIMES[0]) + 0.5
+            if wait > 0:
+                logger.info(f"OpenRouter 20 RPM cap hit, waiting {wait:.1f}s")
+                time.sleep(wait)
+        _OPENROUTER_CALL_TIMES.append(time.time())
+
+
+class ProviderUnavailable(Exception):
+    """All providers exhausted or circuit-broken."""
+
+
 class LLMRouter:
-    """One hardened provider path per user's redesign.
+    """Free-first LLM router. OpenRouter free models primary, Gemini fallback, MiMo paid last."""
 
-    complete() returns LLMResult with real token counts.
-    complete_structured() forces a JSON schema via tool-calling.
-    """
-
-    HF_BASE = "https://router.huggingface.co/v1"
-    NVIDIA_BASE = "https://integrate.api.nvidia.com/v1"
-    NVIDIA_MODEL_FLASH = "deepseek-ai/deepseek-v4-flash"
-    NVIDIA_MODEL_PRO = "deepseek-ai/deepseek-v4-pro"
-    NVIDIA_MODEL_NEMO_ULTRA = "nvidia/nemotron-3-ultra-550b-a55b"
-    NVIDIA_NEMO_EXTRA = {"chat_template_kwargs": {"enable_thinking": True}, "reasoning_budget": 8192}
     OPENROUTER_BASE = "https://openrouter.ai/api/v1"
     GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta"
 
     def __init__(self):
-        self.hf_token = os.getenv("HF_TOKEN", "")
-        self.nvidia_key = os.getenv("NVIDIA_API_KEY", "")
-        self.nvidia_key_2 = os.getenv("NVIDIA_API_KEY_2", "")
         self.openrouter_key = os.getenv("OPENROUTER_API_KEY", "")
         self.openrouter_key_2 = os.getenv("OPENROUTER_API_KEY_2", "")
+        self.openrouter_key_3 = os.getenv("OPENROUTER_API_KEY_3", "")
         self.gemini_key = os.getenv("GEMINI_API_KEY", "")
         self.gemini_key_2 = os.getenv("GEMINI_API_KEY_2", "")
+        self.mimo_key = os.getenv("MIMO_API_KEY", "") or self.openrouter_key  # use OR key for MiMo
 
     def complete(self, prompt: str,
                  system: str = "You are a helpful AI assistant.",
@@ -159,57 +185,38 @@ class LLMRouter:
                  tool_choice: Optional[str] = None,
                  tier: ModelTier = "balanced",
                  ) -> Optional[LLMResult]:
-        """Provider-ordered completion based on tier.
-
-        cheap     → Gemini first (fast/cheap summaries), then OpenRouter, HF, NVIDIA last.
-        powerful  → NVIDIA first (smart decisions), then OpenRouter, HF, Gemini last.
-        balanced  → OpenRouter first, Gemini, HF, NVIDIA.
-        """
-        models = MODEL_TIERS.get(tier, MODEL_TIERS["balanced"])
-        hf_model = model or models["hf"]
+        """Provider-ordered completion. Free models first, paid last."""
+        models_config = MODEL_TIERS.get(tier, MODEL_TIERS["balanced"])
         order = PROVIDER_ORDER.get(tier, PROVIDER_ORDER["balanced"])
         last_error = ""
 
         for provider in order:
-            if provider == "hf":
-                if _hf_breaker.is_open or not self.hf_token:
-                    last_error = "hf: circuit open or no token"
-                    continue
-                for attempt in range(2):
-                    try:
-                        result = self._call_hf(prompt, system, max_tokens,
-                                                temperature, hf_model,
-                                                tools=tools, tool_choice=tool_choice)
-                        if result:
-                            _hf_breaker.record(True)
-                            return result
-                    except Exception as e:
-                        _hf_breaker.record(False)
-                        last_error = str(e)[:100]
-                        if attempt == 0:
-                            time.sleep(1.0 + random.uniform(0, 0.5))
-
-            elif provider == "openrouter":
+            # ── OpenRouter (free models, 20 RPM cap) ──
+            if provider == "openrouter":
                 if _or_breaker.is_open:
                     last_error = "openrouter: circuit open"
                     continue
-                or_models = [
-                    models.get("openrouter", "openrouter/free"),
-                    "openrouter/free",
-                    "deepseek/deepseek-r1",
-                    "deepseek/deepseek-chat",
-                ]
-                for or_model in or_models:
-                    try:
-                        result = self._call_openrouter(prompt, system, max_tokens,
-                                                        temperature, or_model)
-                        if result:
-                            _or_breaker.record(True)
-                            return result
-                    except Exception as e:
-                        _or_breaker.record(False)
-                        last_error = str(e)[:100]
+                or_keys = [k for k in [self.openrouter_key, self.openrouter_key_2, self.openrouter_key_3] if k]
+                or_models = models_config.get("openrouter", FREE_MODELS_POWERFUL)
+                for or_key in or_keys:
+                    for or_model in or_models:
+                        _openrouter_rate_limit()
+                        try:
+                            result = self._call_openrouter(prompt, system, max_tokens,
+                                                            temperature, or_model, or_key,
+                                                            tools=tools, tool_choice=tool_choice)
+                            if result:
+                                _or_breaker.record(True)
+                                return result
+                        except Exception as e:
+                            _or_breaker.record(False)
+                            last_error = str(e)[:100]
+                            status = getattr(e, 'status_code', 0) or 0
+                            if status == 429:
+                                logger.info(f"OpenRouter 429 on {or_model}, trying next model")
+                                break
 
+            # ── Google Gemini (fallback, avoid — censored) ──
             elif provider == "gemini":
                 if _gemini_breaker.is_open:
                     last_error = "gemini: circuit open"
@@ -218,11 +225,7 @@ class LLMRouter:
                     last_error = "gemini: no keys"
                     continue
                 gemini_keys = [k for k in [self.gemini_key, self.gemini_key_2] if k]
-                gemini_models = [
-                    models.get("gemini", "gemini-2.5-flash"),
-                    "gemini-2.5-flash-lite",
-                    "gemini-2.5-pro",
-                ]
+                gemini_models = ["gemini-2.5-flash", "gemini-2.5-pro"]
                 for gkey in gemini_keys:
                     for gmodel in gemini_models:
                         try:
@@ -235,42 +238,25 @@ class LLMRouter:
                             _gemini_breaker.record(False)
                             last_error = str(e)[:100]
 
-            elif provider == "nvidia":
-                if _nv_breaker.is_open:
-                    last_error = "nvidia: circuit open"
+            # ── MiMo v2.5 (PAID — last resort only) ──
+            elif provider == "mimo":
+                if _mimo_breaker.is_open:
+                    last_error = "mimo: circuit open"
                     continue
-                # Try models one at a time per key; skip remaining models on a key if 429
-                nvidia_models = [
-                    (self.NVIDIA_MODEL_FLASH, 120, None),
-                    (self.NVIDIA_MODEL_PRO, 120, None),
-                    (self.NVIDIA_MODEL_NEMO_ULTRA, 300, self.NVIDIA_NEMO_EXTRA),
-                ]
-                for key_attr, key_idx in [
-                    ("nvidia_key", 1),
-                    ("nvidia_key_2", 2),
-                ]:
-                    key = getattr(self, key_attr, None)
-                    if not key:
-                        continue
-                    with _nvidia_serialize_lock:
-                        for mdl, timeout, extra in nvidia_models:
-                            try:
-                                result = self._call_nvidia(prompt, system, max_tokens,
-                                                            temperature, mdl, key, timeout,
-                                                            extra_body=extra)
-                                if result:
-                                    _nv_breaker.record(True)
-                                    return result
-                            except Exception as e:
-                                _nv_breaker.record(False)
-                                status = getattr(e, 'status_code', 0) or 0
-                                is_429 = status == 429 or '429' in str(e)
-                                logger.warning(f"NVIDIA {mdl} (key {key_idx}): {str(e)[:120]}")
-                                last_error = str(e)[:100]
-                                if is_429:
-                                    # Rate limited on this key — skip remaining models
-                                    logger.info(f"NVIDIA key {key_idx} rate-limited, trying next key")
-                                    break
+                if not self.mimo_key:
+                    last_error = "mimo: no key"
+                    continue
+                logger.info(f"Using PAID model MiMo v2.5 (last resort)")
+                try:
+                    result = self._call_openrouter(prompt, system, max_tokens,
+                                                    temperature, MIMO_MODEL, self.mimo_key,
+                                                    tools=tools, tool_choice=tool_choice)
+                    if result:
+                        _mimo_breaker.record(True)
+                        return result
+                except Exception as e:
+                    _mimo_breaker.record(False)
+                    last_error = str(e)[:100]
 
         logger.error(f"All providers exhausted. Last error: {last_error}")
         return None
@@ -282,11 +268,7 @@ class LLMRouter:
                             temperature: float = 0.7,
                             tier: ModelTier = "powerful",
                             ) -> Optional[dict]:
-        """Call LLM with a tool/function schema to force structured JSON output.
-
-        Uses tool_choice='required' + a single function tool defined by schema.
-        Falls back to prose+parse if the provider doesn't support tool calling.
-        """
+        """Call LLM with tool/function schema to force structured JSON output."""
         tool = {
             "type": "function",
             "function": {
@@ -305,13 +287,11 @@ class LLMRouter:
             tier=tier,
         )
         if result and result.text:
-            # Try to extract tool call arguments from response
             try:
                 data = json.loads(result.text)
                 return data
             except json.JSONDecodeError:
                 pass
-            # Try extracting from tool_calls format
             try:
                 data = json.loads(result.text)
                 if "choices" in data:
@@ -321,7 +301,6 @@ class LLMRouter:
                         return json.loads(args)
             except (json.JSONDecodeError, KeyError, IndexError, TypeError):
                 pass
-            # Fallback: try direct parse of any JSON in the response
             json_match = re.search(r'\{.*\}', result.text, re.DOTALL)
             if json_match:
                 try:
@@ -329,7 +308,7 @@ class LLMRouter:
                 except json.JSONDecodeError:
                     pass
 
-        # ── Fallback: retry with a plain-text prompt asking for JSON ──
+        # Fallback: plain-text prompt asking for JSON
         schema_hint = json.dumps(schema["input_schema"], indent=2)
         fallback_prompt = (
             f"{prompt}\n\n"
@@ -356,15 +335,14 @@ class LLMRouter:
         logger.warning("complete_structured: no valid JSON from LLM")
         return None
 
-    # ── HF Inference ────────────────────────────────────────────────
+    # ── OpenRouter ──────────────────────────────────────────────────
 
-    def _call_hf(self, prompt: str, system: str,
-                 max_tokens: int, temperature: float,
-                 model: str,
-                 tools: Optional[list] = None,
-                 tool_choice: Optional[str] = None,
-                 ) -> Optional[LLMResult]:
-        """Try both HF endpoints: router (new, OpenAI-compat) then serverless (old, maybe free)."""
+    def _call_openrouter(self, prompt: str, system: str,
+                          max_tokens: int, temperature: float,
+                          model: str, api_key: str,
+                          tools: Optional[list] = None,
+                          tool_choice: Optional[str] = None,
+                          ) -> Optional[LLMResult]:
         t0 = time.time()
         body = {
             "model": model,
@@ -372,93 +350,23 @@ class LLMRouter:
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
-            "max_tokens": min(max_tokens, 64000),
+            "max_tokens": max_tokens,
             "temperature": temperature,
-            "top_p": 0.95,
         }
         if tools:
             body["tools"] = tools
         if tool_choice:
             body["tool_choice"] = tool_choice
 
-        headers = {
-            "Authorization": f"Bearer {self.hf_token}",
-            "Content-Type": "application/json",
-        }
-
-        endpoints = [
-            self.HF_BASE + "/chat/completions",                            # router.huggingface.co (OpenAI-compat)
-            f"https://api-inference.huggingface.co/models/{model}/v1/chat/completions",  # serverless (legacy)
-        ]
-
-        last_error = ""
-        for url in endpoints:
-            try:
-                resp = requests.post(url, headers=headers, json=body, timeout=120)
-                latency = (time.time() - t0) * 1000
-
-                if resp.status_code == 200:
-                    data = resp.json()
-                    choice = data["choices"][0]
-                    message = choice["message"]
-
-                    if message.get("tool_calls"):
-                        text = message["tool_calls"][0]["function"]["arguments"]
-                    else:
-                        text = message.get("content", "")
-
-                    usage = data.get("usage", {})
-                    in_tokens = usage.get("prompt_tokens", _estimate_tokens(prompt + system))
-                    out_tokens = usage.get("completion_tokens", _estimate_tokens(text))
-
-                    logger.info(f"HF SUCCESS ({url.split('/')[2]}): {len(text)} chars, "
-                                 f"{in_tokens}+{out_tokens} tokens, {latency:.0f}ms")
-                    return LLMResult(
-                        text=text,
-                        input_tokens=in_tokens,
-                        output_tokens=out_tokens,
-                        model=model,
-                        provider="hf",
-                        latency_ms=latency,
-                    )
-
-                logger.info(f"HF ({url.split('/')[2]}) status={resp.status_code}: {resp.text[:150]}")
-                last_error = f"status {resp.status_code}: {resp.text[:100]}"
-                if resp.status_code == 402:
-                    continue  # try next endpoint (different credit pool)
-            except Exception as e:
-                last_error = str(e)[:100]
-                logger.info(f"HF ({url.split('/')[2]}) failed: {last_error}")
-                continue
-
-        raise RuntimeError(f"HF exhausted: {last_error}")
-
-    # ── OpenRouter ──────────────────────────────────────────────────
-
-    def _call_openrouter(self, prompt: str, system: str,
-                          max_tokens: int, temperature: float,
-                          model: str, key_index: int = 1) -> Optional[LLMResult]:
-        key = self.openrouter_key_2 if key_index == 2 else self.openrouter_key
-        if not key:
-            return None
-        t0 = time.time()
         resp = requests.post(
             f"{self.OPENROUTER_BASE}/chat/completions",
             headers={
-                "Authorization": f"Bearer {key}",
+                "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://github.com/MarkCalebChomba/super-agent",
             },
-            json={
-                "model": model,
-                "messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": prompt},
-                ],
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            },
-            timeout=30,
+            json=body,
+            timeout=60,
         )
         latency = (time.time() - t0) * 1000
 
@@ -466,6 +374,7 @@ class LLMRouter:
             data = resp.json()
             text = data["choices"][0]["message"]["content"]
             usage = data.get("usage", {})
+            logger.info(f"OpenRouter SUCCESS ({model}): {len(text)} chars, {latency:.0f}ms")
             return LLMResult(
                 text=text,
                 input_tokens=usage.get("prompt_tokens", _estimate_tokens(prompt + system)),
@@ -475,92 +384,15 @@ class LLMRouter:
                 latency_ms=latency,
             )
         logger.debug(f"OpenRouter ({model}): {resp.status_code}")
-        if resp.status_code == 429:
-            time.sleep(5)
-        return None
+        err = Exception(f"OpenRouter {resp.status_code}: {resp.text[:200]}")
+        err.status_code = resp.status_code
+        raise err
 
-    # ── NVIDIA ──────────────────────────────────────────────────────
-
-    def _call_nvidia(self, prompt: str, system: str,
-                      max_tokens: int, temperature: float,
-                      model: str, api_key: str,
-                      timeout_secs: int,
-                      extra_body: Optional[dict] = None) -> Optional[LLMResult]:
-        """Call NVIDIA with exponential backoff. Single-file serialized by caller.
-
-        Some models (Nemotron) require extra_body for thinking/reasoning.
-        """
-        import httpx
-        from openai import OpenAI
-
-        max_retries = 5
-        last_exc: Optional[Exception] = None
-
-        for attempt in range(max_retries):
-            t0 = time.time()
-            try:
-                http_client = httpx.Client(
-                    timeout=httpx.Timeout(timeout_secs, connect=30, read=timeout_secs, pool=10),
-                )
-                client = OpenAI(
-                    base_url=self.NVIDIA_BASE,
-                    api_key=api_key,
-                    http_client=http_client,
-                    max_retries=0,
-                )
-                kwargs = dict(
-                    model=model,
-                    messages=[
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": prompt},
-                    ],
-                    temperature=temperature,
-                    top_p=0.95,
-                    max_tokens=min(max_tokens, 64000),
-                    stream=False,
-                )
-                if extra_body:
-                    kwargs["extra_body"] = extra_body
-                completion = client.chat.completions.create(**kwargs)
-                latency = (time.time() - t0) * 1000
-                content = completion.choices[0].message.content
-                if content:
-                    usage = completion.usage
-                    return LLMResult(
-                        text=content,
-                        input_tokens=usage.prompt_tokens if usage else _estimate_tokens(prompt + system),
-                        output_tokens=usage.completion_tokens if usage else _estimate_tokens(content),
-                        model=model,
-                        provider="nvidia",
-                        latency_ms=latency,
-                    )
-                return None
-
-            except Exception as e:
-                last_exc = e
-                status = getattr(e, 'status_code', 0) or 0
-                is_429 = status == 429 or '429' in str(e)
-                is_5xx = 500 <= status < 600
-                is_retryable = is_5xx  # only retry 5xx (server overload), NOT 429
-                if attempt < max_retries - 1 and is_retryable:
-                    delay = (0.5 ** attempt) + random.uniform(0, 1.0)
-                    logger.info(f"NVIDIA {status} (attempt {attempt+1}/{max_retries}): "
-                                 f"{str(e)[:100]}, backoff {delay:.1f}s")
-                    time.sleep(delay)
-                    continue
-                # Non-retryable (429, 403, etc.) — raise to fall through to next provider
-                tag = "429" if is_429 else f"err-{status}"
-                logger.info(f"NVIDIA {model} {tag}, falling through to next provider")
-                raise
-
-        raise RuntimeError(f"NVIDIA exhausted after {max_retries} retries: {last_exc}")
-
-    # ── Gemini ──────────────────────────────────────────────────────
+    # ── Gemini (fallback — avoid, heavily censored) ────────────────
 
     def _call_gemini(self, prompt: str, system: str,
                       max_tokens: int, temperature: float,
                       model: str, api_key: str) -> Optional[LLMResult]:
-        """Call Google Gemini API (free tier)."""
         t0 = time.time()
         url = f"{self.GEMINI_BASE}/models/{model}:generateContent?key={api_key}"
         body = {
@@ -586,8 +418,7 @@ class LLMRouter:
                     usage = data.get("usageMetadata", {})
                     in_tokens = usage.get("promptTokenCount", _estimate_tokens(prompt + system))
                     out_tokens = usage.get("candidatesTokenCount", _estimate_tokens(text))
-                    logger.info(f"Gemini SUCCESS ({model}): {len(text)} chars, "
-                                 f"{in_tokens}+{out_tokens} tokens, {latency:.0f}ms")
+                    logger.info(f"Gemini SUCCESS ({model}): {len(text)} chars, {latency:.0f}ms")
                     return LLMResult(
                         text=text,
                         input_tokens=in_tokens,
