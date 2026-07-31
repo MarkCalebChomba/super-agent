@@ -1,0 +1,24 @@
+version: 1.2.1
+cache: true
+endpoints:
+  custom:
+    - name: "OpenRouter"
+      apiKey: "${OPENROUTER_API_KEY}"
+      baseURL: "https://openrouter.ai/api/v1"
+      models:
+        default:
+          - "nvidia/nemotron-3-ultra-550b-a55b:free"
+          - "nvidia/nemotron-3-super-120b-a12b:free"
+          - "google/gemma-4-31b-it:free"
+          - "google/gemma-4-26b-a4b-it:free"
+          - "openai/gpt-oss-20b:free"
+          - "inclusionai/ling-3.0-flash:free"
+          - "xiaomi/mimo-v2.5"
+        fetch: false
+      titleConvo: true
+      titleModel: "nvidia/nemotron-3-super-120b-a12b:free"
+      summarize: false
+      forcePrompt: false
+      modelDisplayLabel: "OpenRouter"
+      dropParams:
+        - "stop"
