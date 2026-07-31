@@ -77,10 +77,11 @@ PROVIDER_ORDER = {
 COST_PER_INPUT_TOKEN = 0.00000014   # $0.14/M tokens (MiMo v2.5)
 COST_PER_OUTPUT_TOKEN = 0.00000028  # $0.28/M tokens (MiMo v2.5)
 
-# Rate limiting: 20 RPM cap for OpenRouter
+# Rate limiting: 20 RPM cap per key for OpenRouter (3 keys = 60 RPM effective)
 _OPENROUTER_RPM_CAP = 20
-_OPENROUTER_CALL_TIMES: list[float] = []
+_OPENROUTER_CALL_TIMES: dict[str, list[float]] = {}  # per-key tracking
 _OPENROUTER_RATE_LOCK = threading.Lock()
+_OPENROUTER_429_UNTIL: dict[str, float] = {}  # per-key 429 cooldown end time
 
 
 class LLMResult(NamedTuple):
@@ -146,19 +147,36 @@ def _estimate_tokens(text: str) -> int:
     return max(1, len(text) // 4)
 
 
-def _openrouter_rate_limit():
-    """Enforce 20 RPM cap on OpenRouter."""
+def _openrouter_rate_limit(key: str = "default"):
+    """Enforce 20 RPM cap per key on OpenRouter. Waits when limit hit."""
     with _OPENROUTER_RATE_LOCK:
         now = time.time()
+        # Check if this key is in 429 cooldown
+        if key in _OPENROUTER_429_UNTIL and now < _OPENROUTER_429_UNTIL[key]:
+            wait = _OPENROUTER_429_UNTIL[key] - now + 0.5
+            logger.info(f"OpenRouter key ...{key[-8:]} in 429 cooldown, waiting {wait:.1f}s")
+            time.sleep(wait)
+            now = time.time()
+        # Track calls per key
+        if key not in _OPENROUTER_CALL_TIMES:
+            _OPENROUTER_CALL_TIMES[key] = []
+        times = _OPENROUTER_CALL_TIMES[key]
         # Remove calls older than 60s
-        while _OPENROUTER_CALL_TIMES and _OPENROUTER_CALL_TIMES[0] < now - 60:
-            _OPENROUTER_CALL_TIMES.pop(0)
-        if len(_OPENROUTER_CALL_TIMES) >= _OPENROUTER_RPM_CAP:
-            wait = 60 - (now - _OPENROUTER_CALL_TIMES[0]) + 0.5
+        while times and times[0] < now - 60:
+            times.pop(0)
+        if len(times) >= _OPENROUTER_RPM_CAP:
+            wait = 60 - (now - times[0]) + 0.5
             if wait > 0:
-                logger.info(f"OpenRouter 20 RPM cap hit, waiting {wait:.1f}s")
+                logger.info(f"OpenRouter key ...{key[-8:]} hit 20 RPM, waiting {wait:.1f}s")
                 time.sleep(wait)
-        _OPENROUTER_CALL_TIMES.append(time.time())
+        _OPENROUTER_CALL_TIMES[key].append(time.time())
+
+
+def _openrouter_record_429(key: str):
+    """Record a 429 on a key — cooldown for 60s."""
+    with _OPENROUTER_RATE_LOCK:
+        _OPENROUTER_429_UNTIL[key] = time.time() + 60
+        logger.info(f"OpenRouter key ...{key[-8:]} got 429, cooling down 60s")
 
 
 class ProviderUnavailable(Exception):
@@ -194,16 +212,26 @@ class LLMRouter:
         last_error = ""
 
         for provider in order:
-            # ── OpenRouter (free models, 20 RPM cap) ──
+            # ── OpenRouter (free models, 20 RPM cap per key) ──
             if provider == "openrouter":
                 if _or_breaker.is_open:
                     last_error = "openrouter: circuit open"
                     continue
                 or_keys = [k for k in [self.openrouter_key, self.openrouter_key_2, self.openrouter_key_3] if k]
                 or_models = models_config.get("openrouter", FREE_MODELS_POWERFUL)
+                # Track if ALL keys are rate-limited before giving up
+                all_keys_rate_limited = True
                 for or_key in or_keys:
+                    key_id = or_key[-8:]  # last 8 chars for logging
+                    # Skip this key if it's in 429 cooldown
+                    with _OPENROUTER_RATE_LOCK:
+                        if or_key in _OPENROUTER_429_UNTIL and time.time() < _OPENROUTER_429_UNTIL[or_key]:
+                            wait = _OPENROUTER_429_UNTIL[or_key] - time.time()
+                            logger.info(f"Skipping key ...{key_id} (429 cooldown, {wait:.0f}s left)")
+                            continue
+                    all_keys_rate_limited = False
                     for or_model in or_models:
-                        _openrouter_rate_limit()
+                        _openrouter_rate_limit(or_key)
                         try:
                             result = self._call_openrouter(prompt, system, max_tokens,
                                                             temperature, or_model, or_key,
@@ -216,8 +244,31 @@ class LLMRouter:
                             last_error = str(e)[:100]
                             status = getattr(e, 'status_code', 0) or 0
                             if status == 429:
-                                logger.info(f"OpenRouter 429 on {or_model}, trying next model")
-                                break
+                                _openrouter_record_429(or_key)
+                                logger.info(f"OpenRouter 429 on {or_model} key ...{key_id}, cooling down this key")
+                                break  # try next key
+                # If all keys are in 429 cooldown, wait for the shortest cooldown
+                if all_keys_rate_limited or (not or_keys):
+                    with _OPENROUTER_RATE_LOCK:
+                        if _OPENROUTER_429_UNTIL:
+                            earliest = min(_OPENROUTER_429_UNTIL.values())
+                            wait = max(0, earliest - time.time()) + 1
+                            if wait > 0 and wait < 120:
+                                logger.info(f"All OpenRouter keys in cooldown, waiting {wait:.0f}s for earliest")
+                                time.sleep(wait)
+                                # After waiting, retry once with first key
+                                if or_keys:
+                                    _openrouter_rate_limit(or_keys[0])
+                                    try:
+                                        result = self._call_openrouter(prompt, system, max_tokens,
+                                                                        temperature, or_models[0], or_keys[0],
+                                                                        tools=tools, tool_choice=tool_choice)
+                                        if result:
+                                            _or_breaker.record(True)
+                                            return result
+                                    except Exception as e:
+                                        _or_breaker.record(False)
+                                        last_error = str(e)[:100]
 
             # ── Google Gemini (fallback, avoid — censored) ──
             elif provider == "gemini":
