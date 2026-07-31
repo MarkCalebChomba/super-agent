@@ -20,21 +20,24 @@ import requests
 
 ModelTier = Literal["cheap", "balanced", "powerful"]
 
-# ── Free models on OpenRouter (March-June 2026) ──────────────────────
+# ── Free models on OpenRouter (verified July 2026) ───────────────────
 # Intelligent models (use for decision-making, planning, evaluation)
 FREE_MODELS_POWERFUL = [
-    "nvidia/nemotron-3-ultra:free",          # powerful reasoning
-    "google/gemma-4-31b:free",               # intelligent, large context
-    "nvidia/nemotron-3-super:free",          # strong general
-    "google/gemma-4-26b-a4b:free",           # intelligent, efficient
+    "nvidia/nemotron-3-ultra-550b-a55b:free",   # powerful reasoning
+    "google/gemma-4-31b-it:free",                # intelligent, large context
+    "nvidia/nemotron-3-super-120b-a12b:free",    # strong general
+    "google/gemma-4-26b-a4b-it:free",            # intelligent, efficient
+    "openai/gpt-oss-20b:free",                   # open source GPT
 ]
 
 # Fast models (use for extraction, summaries, cheap work)
 FREE_MODELS_CHEAP = [
-    "inclusionai/ling-3.0-flash:free",       # fast language
-    "nvidia/nemotron-3-nano-omni:free",      # fast multimodal
-    "poolside/laguna-xs-2.1:free",           # fast code
-    "poolside/laguna-s-2.1:free",            # code
+    "inclusionai/ling-3.0-flash:free",           # fast language
+    "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",  # fast reasoning
+    "poolside/laguna-xs-2.1:free",               # fast code
+    "poolside/laguna-s-2.1:free",                # code
+    "nvidia/nemotron-nano-12b-v2-vl:free",       # vision-language
+    "nvidia/nemotron-nano-9b-v2:free",           # tiny fast
 ]
 
 # Code-specific models
@@ -45,7 +48,7 @@ FREE_MODELS_CODE = [
 ]
 
 # MiMo v2.5 — PAID, only when very necessary
-MIMO_MODEL = "mimo/mimo-v2.5"
+MIMO_MODEL = "xiaomi/mimo-v2.5"
 
 # Tier → model mapping
 MODEL_TIERS = {
@@ -71,8 +74,8 @@ PROVIDER_ORDER = {
 }
 
 # Approximate costs (MiMo v2.5 only — free models cost $0)
-COST_PER_INPUT_TOKEN = 0.0000005   # $0.50/M tokens (MiMo estimate)
-COST_PER_OUTPUT_TOKEN = 0.0000015  # $1.50/M tokens (MiMo estimate)
+COST_PER_INPUT_TOKEN = 0.00000014   # $0.14/M tokens (MiMo v2.5)
+COST_PER_OUTPUT_TOKEN = 0.00000028  # $0.28/M tokens (MiMo v2.5)
 
 # Rate limiting: 20 RPM cap for OpenRouter
 _OPENROUTER_RPM_CAP = 20
