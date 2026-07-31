@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  librechat:
+    image: ghcr.io/danny-avila/librechat:latest
+    container_name: librechat
+    ports:
+      - "3080:3080"
+    environment:
+      - MONGO_URI=mongodb://mongo:27017/librechat
+      - CREDS_KEY=librechat-creds-key-change-me
+      - CREDS_IV=librechat-creds-iv-change-me
+      - JWT_SECRET=librechat-jwt-secret-change-me
+      - JWT_REFRESH_SECRET=librechat-jwt-refresh-change-me
+      # OpenRouter configuration
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+    depends_on:
+      - mongo
+    restart: always
+
+  mongo:
+    image: mongo:7
+    container_name: librechat-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: always
+
+volumes:
+  mongo_data:

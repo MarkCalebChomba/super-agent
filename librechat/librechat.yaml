@@ -1,5 +1,9 @@
 version: 1.2.1
 cache: true
+registration:
+  enabled: true
+  socialLogins: []
+  allowedDomains: []
 endpoints:
   custom:
     - name: "OpenRouter"

@@ -66,11 +66,11 @@ MODEL_TIERS = {
     },
 }
 
-# Provider attempt order: OpenRouter first → Google fallback → MiMo paid last
+# Provider attempt order: MiMo first (free models returning 401) → OpenRouter → Google fallback
 PROVIDER_ORDER = {
-    "cheap":     ["openrouter", "gemini", "mimo"],
-    "balanced":  ["openrouter", "gemini", "mimo"],
-    "powerful":  ["openrouter", "gemini", "mimo"],
+    "cheap":     ["mimo"],
+    "balanced":  ["mimo"],
+    "powerful":  ["mimo"],
 }
 
 # Approximate costs (MiMo v2.5 only — free models cost $0)
@@ -138,7 +138,7 @@ class CircuitBreaker:
 
 
 # ── Global circuit breakers ──────────────────────────────────────────
-_or_breaker = CircuitBreaker("openrouter", fail_threshold=5, cooldown_s=60)
+_or_breaker = CircuitBreaker("openrouter", fail_threshold=10, cooldown_s=60)
 _gemini_breaker = CircuitBreaker("gemini", fail_threshold=3, cooldown_s=120)
 _mimo_breaker = CircuitBreaker("mimo", fail_threshold=3, cooldown_s=120)
 
@@ -247,6 +247,10 @@ class LLMRouter:
                                 _openrouter_record_429(or_key)
                                 logger.info(f"OpenRouter 429 on {or_model} key ...{key_id}, cooling down this key")
                                 break  # try next key
+                            elif status == 401:
+                                logger.info(f"OpenRouter 401 on {or_model}, skipping model")
+                                continue  # try next model
+                        time.sleep(0.5)  # small delay between attempts
                 # If all keys are in 429 cooldown, wait for the shortest cooldown
                 if all_keys_rate_limited or (not or_keys):
                     with _OPENROUTER_RATE_LOCK:
@@ -418,9 +422,10 @@ class LLMRouter:
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
                 "HTTP-Referer": "https://github.com/MarkCalebChomba/super-agent",
+                "X-Title": "SuperAgent",
             },
             json=body,
-            timeout=60,
+            timeout=180,
         )
         latency = (time.time() - t0) * 1000
 
