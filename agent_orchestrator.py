@@ -737,9 +737,21 @@ Return your evaluation via the submit_evaluation function.
         revision_hint = ""
         result = None  # ensure defined for error path
 
+        try:
+            from live_tracker import update as _lt_update
+            _lt_update(self.agent.name, input_text=f"Cycle {self.agent.orchestrator.cycle_count if hasattr(self.agent, 'orchestrator') else '?'}: {task_id} — {task.get('description','')[:80]}")
+        except Exception:
+            pass
+
         # ── Revision loop ─────────────────────────────────────────────
         while self.revision_count <= self.max_revisions:
             task["state"] = "EXECUTING"
+
+            try:
+                from live_tracker import update as _lt_update
+                _lt_update(self.agent.name, input_text=f"Executing: {task_id} (attempt {self.revision_count + 1})")
+            except Exception:
+                pass
 
             # EXECUTING
             result = self._execute_task(task, revision_hint)
@@ -770,6 +782,12 @@ Return your evaluation via the submit_evaluation function.
             logger.info(f"{self.agent.name} | {task_id} | verdict={verdict} score={score}/10")
             self.event_log.write(phase="evaluated", cycle_id=cycle_id,
                                   task_id=task_id, verdict=verdict, score=score)
+
+            try:
+                from live_tracker import update as _lt_update
+                _lt_update(self.agent.name, input_text=f"Evaluated: {task_id} — {verdict} ({score}/10)")
+            except Exception:
+                pass
 
             if verdict == "passed":
                 # PASSED → SHIPPING

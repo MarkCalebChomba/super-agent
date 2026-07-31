@@ -431,8 +431,16 @@ class LLMRouter:
 
         if resp.status_code == 200:
             data = resp.json()
-            text = data["choices"][0]["message"]["content"]
+            msg = data["choices"][0]["message"]
+            text = msg.get("content") or ""
+            tool_calls = msg.get("tool_calls")
             usage = data.get("usage", {})
+            # If tool call with arguments, use the arguments as text
+            if tool_calls and not text:
+                try:
+                    text = tool_calls[0]["function"]["arguments"]
+                except (KeyError, IndexError):
+                    pass
             logger.info(f"OpenRouter SUCCESS ({model}): {len(text)} chars, {latency:.0f}ms")
             return LLMResult(
                 text=text,
